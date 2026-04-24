@@ -1,8 +1,8 @@
 """
 Retriever — similarity search against the vector store.
-Phase 1 skeleton: interface defined, ChromaDB client stubbed out.
+Phase 1 skeleton: interface defined, ChromaDB client wired up.
 """
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from app.core.config import get_settings
 from app.core.logging import get_logger
 
@@ -23,6 +23,7 @@ class VaultRetriever:
     def __init__(self) -> None:
         self._client = None
         self._collection = None
+        self._unavailable_logged = False
 
     def connect(self) -> None:
         """Initialize ChromaDB connection. Called at app startup."""
@@ -35,16 +36,25 @@ class VaultRetriever:
             self._collection = self._client.get_or_create_collection(
                 name=settings.chroma_collection
             )
-            logger.info("Retriever: connected to ChromaDB collection '%s'", settings.chroma_collection)
+            logger.info(
+                "Retriever: connected to ChromaDB at %s:%s — collection '%s'",
+                settings.chroma_host, settings.chroma_port, settings.chroma_collection,
+            )
         except Exception as exc:
-            logger.warning("Retriever: ChromaDB unavailable — %s (running in stub mode)", exc)
+            logger.warning(
+                "Retriever: ChromaDB unavailable at %s:%s — %s. "
+                "Start ChromaDB with: docker-compose up chromadb",
+                settings.chroma_host, settings.chroma_port, exc,
+            )
 
     def search(self, query: str, top_k: int | None = None) -> list[RetrievedChunk]:
         """Return top-k semantically similar chunks for a query."""
         k = top_k or settings.rag_top_k
 
         if self._collection is None:
-            logger.warning("Retriever: no collection — returning empty results")
+            if not self._unavailable_logged:
+                logger.warning("Retriever: no ChromaDB collection — returning empty results")
+                self._unavailable_logged = True
             return []
 
         results = self._collection.query(query_texts=[query], n_results=k)

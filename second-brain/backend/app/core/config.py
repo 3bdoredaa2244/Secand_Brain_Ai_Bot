@@ -17,15 +17,15 @@ class Settings(BaseSettings):
     port: int = 8000
 
     # Redis
-    redis_url: str = "redis://redis:6379"
+    redis_url: str = "redis://localhost:6379"
     redis_stream_actions: str = "stream:actions"
     redis_stream_triggers: str = "stream:triggers"
 
     # Vault
-    vault_path: Path = Path("/vault")
+    vault_path: Path = Path("../vault")
 
     # RAG / Vector store
-    chroma_host: str = "chromadb"
+    chroma_host: str = "localhost"
     chroma_port: int = 8001
     chroma_collection: str = "second_brain"
     embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"

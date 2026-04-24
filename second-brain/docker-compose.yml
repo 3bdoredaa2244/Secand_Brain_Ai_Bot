@@ -10,14 +10,15 @@ services:
       - ./backend:/app
       - ./vault:/vault:ro
     environment:
-      - DEBUG=true
-      - LOG_LEVEL=DEBUG
+      # Override localhost defaults from .env — use Docker service names inside the network
       - REDIS_URL=redis://redis:6379
       - CHROMA_HOST=chromadb
-      - CHROMA_PORT=8001
+      - CHROMA_PORT=8000
       - VAULT_PATH=/vault
+      - DEBUG=true
+      - LOG_LEVEL=DEBUG
     env_file:
-      - .env
+      - backend/.env
     depends_on:
       redis:
         condition: service_healthy
@@ -38,6 +39,7 @@ services:
       interval: 5s
       timeout: 3s
       retries: 5
+      start_period: 5s
     restart: unless-stopped
 
   chromadb:
@@ -51,10 +53,11 @@ services:
       - IS_PERSISTENT=TRUE
       - ANONYMIZED_TELEMETRY=FALSE
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/heartbeat"]
+      test: ["CMD-SHELL", "curl -sf http://localhost:8000/api/v1/heartbeat || wget -qO- http://localhost:8000/api/v1/heartbeat"]
       interval: 10s
       timeout: 5s
-      retries: 5
+      retries: 10
+      start_period: 30s
     restart: unless-stopped
 
   n8n:
