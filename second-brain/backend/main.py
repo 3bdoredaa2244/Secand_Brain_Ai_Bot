@@ -1,4 +1,3 @@
-
 import asyncio
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
@@ -19,14 +18,36 @@ settings = get_settings()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Starting %s v%s", settings.app_name, settings.app_version)
-    retriever.connect()
-    await consumer.connect()
+
+    # ---- Startup ----
+    try:
+        retriever.connect()
+    except Exception as e:
+        logger.warning("Retriever failed: %s", e)
+
+    try:
+        await consumer.connect()
+    except Exception as e:
+        logger.warning("Redis consumer failed to connect: %s", e)
+
     consumer_task = asyncio.create_task(consumer.start())
     worker_task = asyncio.create_task(worker.start())
+
     yield
+
+    # ---- Shutdown ----
     logger.info("Shutting down")
-    await consumer.stop()
-    await worker.stop()
+
+    try:
+        await consumer.stop()
+    except Exception:
+        pass
+
+    try:
+        await worker.stop()
+    except Exception:
+        pass
+
     consumer_task.cancel()
     worker_task.cancel()
 
