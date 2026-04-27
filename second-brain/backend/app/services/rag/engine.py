@@ -21,15 +21,11 @@ class RAGEngine:
     async def index_vault(self) -> int:
         """Reindex all vault documents. Returns chunk count."""
         chunks = self._indexer.scan()
-        if not chunks or self._retriever._collection is None:
-            logger.warning("RAGEngine: skipping vector upsert (no collection or no chunks)")
-            return len(chunks)
+        if not chunks:
+            logger.warning("RAGEngine: no chunks produced by indexer")
+            return 0
 
-        self._retriever._collection.upsert(
-            ids=[c.id for c in chunks],
-            documents=[c.content for c in chunks],
-            metadatas=[c.metadata for c in chunks],
-        )
+        self._retriever.upsert(chunks)
         logger.info("RAGEngine: upserted %d chunks", len(chunks))
         return len(chunks)
 

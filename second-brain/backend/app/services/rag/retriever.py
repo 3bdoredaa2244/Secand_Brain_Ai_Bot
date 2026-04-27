@@ -1,8 +1,8 @@
 """
-Retriever — similarity search against the vector store.
-Phase 1 skeleton: interface defined, ChromaDB client wired up.
+Retriever — similarity search and write operations against the vector store.
 """
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+
 from app.core.config import get_settings
 from app.core.logging import get_logger
 
@@ -25,8 +25,10 @@ class VaultRetriever:
         self._collection = None
         self._unavailable_logged = False
 
+    # ── lifecycle ─────────────────────────────────────────────────────────────
+
     def connect(self) -> None:
-        """Initialize ChromaDB connection. Called at app startup."""
+        """Initialize ChromaDB connection. Called once at app startup."""
         try:
             import chromadb  # noqa: PLC0415
             self._client = chromadb.HttpClient(
@@ -43,9 +45,36 @@ class VaultRetriever:
         except Exception as exc:
             logger.warning(
                 "Retriever: ChromaDB unavailable at %s:%s — %s. "
-                "Start ChromaDB with: docker-compose up chromadb",
+                "Start with: docker-compose up chromadb",
                 settings.chroma_host, settings.chroma_port, exc,
             )
+
+    # ── write ─────────────────────────────────────────────────────────────────
+
+    def upsert(self, chunks: list) -> None:
+        """Insert or update a list of RawChunk objects in the collection."""
+        if self._collection is None or not chunks:
+            return
+        self._collection.upsert(
+            ids=[c.id for c in chunks],
+            documents=[c.content for c in chunks],
+            metadatas=[c.metadata for c in chunks],
+        )
+
+    def delete_by_source(self, source: str) -> None:
+        """Remove every chunk whose metadata['source'] equals *source*.
+
+        Safe to call even when no matching documents exist.
+        """
+        if self._collection is None:
+            return
+        try:
+            self._collection.delete(where={"source": source})
+        except Exception as exc:
+            # ChromaDB raises when collection is empty or no match found
+            logger.debug("Retriever.delete_by_source('%s'): %s", source, exc)
+
+    # ── read ──────────────────────────────────────────────────────────────────
 
     def search(self, query: str, top_k: int | None = None) -> list[RetrievedChunk]:
         """Return top-k semantically similar chunks for a query."""
@@ -53,23 +82,21 @@ class VaultRetriever:
 
         if self._collection is None:
             if not self._unavailable_logged:
-                logger.warning("Retriever: no ChromaDB collection — returning empty results")
+                logger.warning("Retriever: ChromaDB not connected — returning empty results")
                 self._unavailable_logged = True
             return []
 
         results = self._collection.query(query_texts=[query], n_results=k)
-        chunks: list[RetrievedChunk] = []
-        for i, doc in enumerate(results["documents"][0]):
-            chunks.append(
-                RetrievedChunk(
-                    id=results["ids"][0][i],
-                    content=doc,
-                    source=results["metadatas"][0][i].get("source", "unknown"),
-                    score=1 - results["distances"][0][i],
-                    metadata=results["metadatas"][0][i],
-                )
+        return [
+            RetrievedChunk(
+                id=results["ids"][0][i],
+                content=doc,
+                source=results["metadatas"][0][i].get("source", "unknown"),
+                score=1 - results["distances"][0][i],
+                metadata=results["metadatas"][0][i],
             )
-        return chunks
+            for i, doc in enumerate(results["documents"][0])
+        ]
 
 
-retriever = VaultRetriever()
+retriever = VaultRetriever()  # singleton
