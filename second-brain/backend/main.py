@@ -6,6 +6,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import get_settings
 from app.core.logging import setup_logging, get_logger
 from app.api.v1.router import router
+from app.services.confirmation_gate.gate import gate
+from app.services.integrations.calendar import calendar_service
+from app.services.integrations.email import email_service
 from app.services.rag.retriever import retriever
 from app.services.obsidian import watcher as _watcher_mod
 from app.services.obsidian.sync import sync as obsidian_sync
@@ -19,6 +22,18 @@ settings = get_settings()
 
 # Exposed on the module so the /obsidian/status endpoint can inspect it
 _watcher_mod._watcher = None
+
+
+async def _startup_sync() -> None:
+    """Run a full vault sync once in the background after startup."""
+    try:
+        result = await obsidian_sync.sync_all()
+        logger.info(
+            "Startup sync complete: %d files, %d chunks, %d errors",
+            result.files_scanned, result.chunks_indexed, result.errors,
+        )
+    except Exception as exc:
+        logger.error("Startup sync failed: %s", exc)
 
 
 @asynccontextmanager
@@ -36,6 +51,13 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         logger.warning("Redis consumer failed to connect: %s", exc)
 
+    # Gate gets its own Redis connection (separate from the stream consumer)
+    await gate.connect()
+
+    # Integrations: attempt real connect; both degrade to mock silently
+    await email_service.connect()
+    await calendar_service.connect()
+
     # ── vault file watcher (runs in an OS background thread) ──
     loop = asyncio.get_running_loop()
     vault_watcher = VaultWatcher(
@@ -45,6 +67,10 @@ async def lifespan(app: FastAPI):
     )
     vault_watcher.start(loop)
     _watcher_mod._watcher = vault_watcher
+
+    # ── startup vault sync (fires once in background, does not block startup) ──
+    if settings.obsidian_sync_on_startup:
+        asyncio.create_task(_startup_sync())
 
     # ── async background workers ──
     consumer_task = asyncio.create_task(consumer.start())

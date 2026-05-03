@@ -4,6 +4,8 @@ Obsidian vault API endpoints.
 POST /api/v1/obsidian/sync          — full vault re-index (background)
 POST /api/v1/obsidian/sync/file     — re-index a single file (blocking)
 GET  /api/v1/obsidian/status        — vault stats without re-indexing
+GET  /api/v1/obsidian/graph         — wikilink graph summary
+GET  /api/v1/obsidian/graph/node    — links + backlinks for a specific note
 """
 from pathlib import Path
 
@@ -12,6 +14,7 @@ from pydantic import BaseModel
 
 from app.core.config import get_settings
 from app.core.logging import get_logger
+from app.services.obsidian.graph import graph as vault_graph
 from app.services.obsidian.sync import ObsidianSync, SyncResult, sync as default_sync
 
 logger = get_logger(__name__)
@@ -33,6 +36,19 @@ class VaultStatus(BaseModel):
     exists: bool
     md_files: int
     watcher_active: bool
+
+
+class GraphSummary(BaseModel):
+    nodes: int
+    edges: int
+    most_linked: list[dict]
+
+
+class NodeLinks(BaseModel):
+    source: str
+    links: list[str]       # notes this file links to
+    backlinks: list[str]   # notes that link to this file
+    related: list[str]     # 2-hop neighbourhood
 
 
 # ── dependency ────────────────────────────────────────────────────────────────
@@ -115,6 +131,33 @@ async def vault_status() -> VaultStatus:
         exists=exists,
         md_files=md_count,
         watcher_active=watcher_active,
+    )
+
+
+@router.get("/graph", response_model=GraphSummary)
+async def graph_summary() -> GraphSummary:
+    """Return high-level wikilink graph statistics."""
+    s = vault_graph.summary()
+    return GraphSummary(
+        nodes=s["nodes"],
+        edges=s["edges"],
+        most_linked=s["most_linked"],
+    )
+
+
+@router.get("/graph/node", response_model=NodeLinks)
+async def graph_node(
+    source: str = Query(
+        ...,
+        description="Relative vault path — e.g. 05-knowledge/Python.md",
+    ),
+) -> NodeLinks:
+    """Return forward links, backlinks, and 2-hop neighbours for a single note."""
+    return NodeLinks(
+        source=source,
+        links=vault_graph.get_links(source),
+        backlinks=vault_graph.get_backlinks(source),
+        related=vault_graph.get_related(source, depth=2),
     )
 
 

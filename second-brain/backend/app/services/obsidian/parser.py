@@ -3,6 +3,7 @@ Obsidian markdown parser.
 
 Understands:
   - YAML frontmatter (title, tags, date, aliases, …)
+  - Structured fields: type, priority, due_date, status (promoted for indexing)
   - Inline #tags in the body
   - [[Wikilinks]] and [[Wikilink|display text]]
   - ![[Embeds]] (stripped from clean text)
@@ -25,6 +26,11 @@ _WIKILINK_RE = re.compile(r"\[\[([^\]|#]+)(?:#[^\]|]*)?((?:\|[^\]]+)?)\]\]")
 _INLINE_TAG_RE = re.compile(r"(?<!\S)#([A-Za-z][A-Za-z0-9_/\-]*)")
 _H1_RE = re.compile(r"^#\s+(.+)", re.MULTILINE)
 
+# Known structured field names (case-insensitive lookup)
+_NOTE_TYPES = {"task", "note", "reminder", "health", "finance", "meeting", "person", "project"}
+_PRIORITIES = {"high", "medium", "low", "urgent"}
+_STATUSES = {"open", "done", "cancelled", "in-progress", "archived"}
+
 
 @dataclass
 class ObsidianNote:
@@ -32,9 +38,17 @@ class ObsidianNote:
     title: str
     body: str           # clean text for indexing (frontmatter stripped, wikilinks resolved)
     raw_content: str
+
+    # Flat collections
     tags: list[str] = field(default_factory=list)
     frontmatter: dict = field(default_factory=dict)
     wikilinks: list[str] = field(default_factory=list)
+
+    # Promoted structured fields — usable as ChromaDB `where` filters
+    note_type: str = ""     # task | note | reminder | health | finance | …
+    priority: str = ""      # high | medium | low | urgent
+    due_date: str = ""      # ISO date string, e.g. "2024-03-15"
+    status: str = ""        # open | done | cancelled | in-progress | archived
 
 
 # ── frontmatter ───────────────────────────────────────────────────────────────
@@ -46,7 +60,6 @@ def _parse_yaml(raw: str) -> dict:
             return result if isinstance(result, dict) else {}
         except Exception:
             pass
-    # fallback: simple key: value (no nesting)
     out: dict = {}
     for line in raw.splitlines():
         if ":" in line:
@@ -56,18 +69,35 @@ def _parse_yaml(raw: str) -> dict:
 
 
 def _normalize_tags(raw) -> list[str]:
-    """Accept tags in any YAML form and return a flat list of lowercase strings."""
     if not raw:
         return []
     if isinstance(raw, str):
         return [t.strip().lstrip("#") for t in re.split(r"[,\s]+", raw) if t.strip()]
     if isinstance(raw, list):
-        out = []
-        for item in raw:
-            if isinstance(item, str):
-                out.append(item.strip().lstrip("#"))
-        return out
+        return [str(item).strip().lstrip("#") for item in raw if item]
     return []
+
+
+def _extract_structured(fm: dict) -> tuple[str, str, str, str]:
+    """Return (note_type, priority, due_date, status) from frontmatter."""
+    note_type = str(fm.get("type", fm.get("note_type", ""))).strip().lower()
+    if note_type not in _NOTE_TYPES:
+        note_type = ""
+
+    priority = str(fm.get("priority", "")).strip().lower()
+    if priority not in _PRIORITIES:
+        priority = ""
+
+    due_date = str(fm.get("due_date", fm.get("due", fm.get("deadline", "")))).strip()
+    # Basic sanity check: looks like a date
+    if not re.match(r"^\d{4}-\d{2}-\d{2}", due_date):
+        due_date = ""
+
+    status = str(fm.get("status", fm.get("state", ""))).strip().lower()
+    if status not in _STATUSES:
+        status = ""
+
+    return note_type, priority, due_date, status
 
 
 # ── public ────────────────────────────────────────────────────────────────────
@@ -84,6 +114,9 @@ def parse_note(path: Path) -> ObsidianNote:
         frontmatter = _parse_yaml(m.group(1))
         body_text = raw[m.end():]
 
+    # ── structured fields ──
+    note_type, priority, due_date, status = _extract_structured(frontmatter)
+
     # ── tags ──
     tags = _normalize_tags(frontmatter.get("tags") or frontmatter.get("tag"))
     for inline in _INLINE_TAG_RE.findall(body_text):
@@ -92,13 +125,12 @@ def parse_note(path: Path) -> ObsidianNote:
             tags.append(t)
 
     # ── wikilinks ──
-    wikilinks = [m.group(1).strip() for m in _WIKILINK_RE.finditer(body_text)]
+    wikilinks = [wm.group(1).strip() for wm in _WIKILINK_RE.finditer(body_text)]
 
-    # ── clean body for indexing ──
+    # ── clean body ──
     clean = _EMBED_RE.sub("", body_text)
-    # resolve wikilinks: [[Note|Display]] → Display, [[Note]] → Note
     clean = _WIKILINK_RE.sub(
-        lambda m: (m.group(2).lstrip("|") if m.group(2) else m.group(1)), clean
+        lambda wm: (wm.group(2).lstrip("|") if wm.group(2) else wm.group(1)), clean
     )
     clean = clean.strip()
 
@@ -117,6 +149,10 @@ def parse_note(path: Path) -> ObsidianNote:
         tags=tags,
         frontmatter=frontmatter,
         wikilinks=wikilinks,
+        note_type=note_type,
+        priority=priority,
+        due_date=due_date,
+        status=status,
     )
 
 

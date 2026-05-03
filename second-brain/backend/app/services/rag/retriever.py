@@ -76,8 +76,17 @@ class VaultRetriever:
 
     # ── read ──────────────────────────────────────────────────────────────────
 
-    def search(self, query: str, top_k: int | None = None) -> list[RetrievedChunk]:
-        """Return top-k semantically similar chunks for a query."""
+    def search(
+        self,
+        query: str,
+        top_k: int | None = None,
+        where: dict | None = None,
+    ) -> list[RetrievedChunk]:
+        """Return top-k semantically similar chunks for a query.
+
+        `where` maps directly to ChromaDB metadata filters, e.g.
+        {"note_type": "task"} or {"priority": "high"}.
+        """
         k = top_k or settings.rag_top_k
 
         if self._collection is None:
@@ -86,7 +95,11 @@ class VaultRetriever:
                 self._unavailable_logged = True
             return []
 
-        results = self._collection.query(query_texts=[query], n_results=k)
+        kwargs: dict = {"query_texts": [query], "n_results": k}
+        if where:
+            kwargs["where"] = where
+
+        results = self._collection.query(**kwargs)
         return [
             RetrievedChunk(
                 id=results["ids"][0][i],

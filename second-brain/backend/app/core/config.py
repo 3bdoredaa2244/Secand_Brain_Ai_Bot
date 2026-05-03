@@ -31,6 +31,9 @@ class Settings(BaseSettings):
     embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
     rag_top_k: int = 5
 
+    # Obsidian auto-sync
+    obsidian_sync_on_startup: bool = True
+
     # Confirmation gate
     gate_timeout_seconds: int = 300
     gate_require_confirmation: bool = True
@@ -38,6 +41,37 @@ class Settings(BaseSettings):
     # Security
     secret_key: str = "change-me-in-production"
     allowed_origins: list[str] = ["http://localhost:3000"]
+
+    # ── Phase 2: LLM ─────────────────────────────────────────────────────────
+    # Provider: "anthropic" | "openai" | "none"
+    llm_provider: str = "none"
+    anthropic_api_key: str = ""
+    openai_api_key: str = ""
+    # Whisper model size for local transcription: tiny | base | small | medium
+    whisper_model: str = "tiny"
+
+    # ── Phase 2: Integrations ─────────────────────────────────────────────────
+    gmail_client_id: str = ""
+    gmail_client_secret: str = ""
+    gmail_refresh_token: str = ""
+    google_calendar_credentials_json: str = ""
+
+    # ── Phase 2: Health ───────────────────────────────────────────────────────
+    # Comma-separated list of daily vitamins to track
+    health_vitamins: str = "Vitamin D,Omega-3,Magnesium"
+    # Hour (0–23) at which the daily health check trigger fires
+    health_check_hour: int = 8
+
+    def has_llm(self) -> bool:
+        """True when at least one LLM provider is fully configured."""
+        if self.llm_provider == "anthropic":
+            return bool(self.anthropic_api_key)
+        if self.llm_provider == "openai":
+            return bool(self.openai_api_key)
+        return False
+
+    def vitamins_list(self) -> list[str]:
+        return [v.strip() for v in self.health_vitamins.split(",") if v.strip()]
 
 
 @lru_cache

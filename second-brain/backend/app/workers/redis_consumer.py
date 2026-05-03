@@ -1,8 +1,15 @@
 """
 Redis stream consumer — reads events from action and trigger streams.
-Phase 1 skeleton: connection handling + message dispatch loop.
+
+Dispatch logic (Phase 2):
+  stream:triggers  → evaluate the named trigger; if it fires, submit an action
+                     plan to the confirmation gate
+  stream:actions   → log the incoming action event (execution happens after
+                     the user approves via the confirmation gate)
 """
 import asyncio
+import json
+
 from app.core.config import get_settings
 from app.core.logging import get_logger
 
@@ -79,7 +86,50 @@ class RedisStreamConsumer:
 
     async def _dispatch(self, stream: str, msg_id: str, data: dict) -> None:
         logger.debug("Stream %s | msg %s | data %s", stream, msg_id, data)
-        # Phase 2: route to trigger evaluators and action handlers
+
+        if stream == settings.redis_stream_triggers:
+            await self._handle_trigger(data)
+        elif stream == settings.redis_stream_actions:
+            await self._handle_action(data)
+
+    async def _handle_trigger(self, data: dict) -> None:
+        """Evaluate the named trigger and log the fired event."""
+        name = data.get("name", "unknown")
+        try:
+            payload = json.loads(data.get("payload", "{}"))
+        except json.JSONDecodeError:
+            payload = dict(data)
+
+        # Import here to avoid circular imports at module load time
+        from app.services.triggers.scheduled import SCHEDULED_TRIGGERS  # noqa: PLC0415
+        from app.services.triggers.realtime import REALTIME_TRIGGERS     # noqa: PLC0415
+        from app.services.triggers.semantic import SEMANTIC_TRIGGERS     # noqa: PLC0415
+
+        all_triggers = SCHEDULED_TRIGGERS + REALTIME_TRIGGERS + SEMANTIC_TRIGGERS
+        trigger = next((t for t in all_triggers if t.definition.name == name), None)
+
+        if trigger is None:
+            logger.warning("RedisStreamConsumer: unknown trigger '%s' — ignoring", name)
+            return
+
+        try:
+            event = await trigger.evaluate(payload)
+            if event:
+                logger.info(
+                    "RedisStreamConsumer: trigger '%s' fired → domain=%s",
+                    event.name, event.domain,
+                )
+        except Exception as exc:
+            logger.error("RedisStreamConsumer: trigger '%s' raised — %s", name, exc)
+
+    async def _handle_action(self, data: dict) -> None:
+        """Log an inbound action event (execution only after gate approval)."""
+        action_type = data.get("type", "unknown")
+        action_id = data.get("id", "?")
+        logger.info(
+            "RedisStreamConsumer: action event received — type=%s id=%s",
+            action_type, action_id,
+        )
 
 
 consumer = RedisStreamConsumer()
