@@ -1,7 +1,8 @@
 import asyncio
 from contextlib import asynccontextmanager
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from app.core.config import get_settings
 from app.core.logging import setup_logging, get_logger
@@ -112,3 +113,22 @@ app.add_middleware(
 )
 
 app.include_router(router)
+
+
+@app.exception_handler(Exception)
+async def _unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    """Catch any exception that escapes endpoint handlers and return JSON.
+
+    Starlette's default ServerErrorMiddleware returns plain-text
+    'Internal Server Error', which the frontend cannot parse as JSON.
+    This handler ensures every 500 is a well-formed JSON response.
+    """
+    logger.error(
+        "Unhandled exception on %s %s: %s",
+        request.method, request.url.path, exc,
+        exc_info=True,
+    )
+    return JSONResponse(
+        status_code=500,
+        content={"error": "Internal server error", "detail": str(exc)},
+    )

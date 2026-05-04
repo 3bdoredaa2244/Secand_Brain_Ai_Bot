@@ -113,36 +113,37 @@ async def sync_file(
 @router.get("/status", response_model=VaultStatus)
 async def vault_status() -> VaultStatus:
     """Return vault statistics without modifying the index."""
-    vault = settings.vault_path.resolve()
-    exists = vault.exists()
-    md_count = len(list(vault.rglob("*.md"))) if exists else 0
+    try:
+        vault = settings.vault_path.resolve()
+        exists = vault.exists()
+        md_count = _count_md_files(vault) if exists else 0
 
-    # Check if watcher is running by inspecting the module-level watcher
-    from app.services.obsidian import watcher as _watcher_mod  # noqa: PLC0415
-    watcher_active = (
-        hasattr(_watcher_mod, "_watcher")
-        and _watcher_mod._watcher is not None
-        and getattr(_watcher_mod._watcher, "_observer", None) is not None
-        and getattr(_watcher_mod._watcher._observer, "is_alive", lambda: False)()
-    )
+        watcher_active = _check_watcher()
 
-    return VaultStatus(
-        vault_path=str(vault),
-        exists=exists,
-        md_files=md_count,
-        watcher_active=watcher_active,
-    )
+        return VaultStatus(
+            vault_path=str(vault),
+            exists=exists,
+            md_files=md_count,
+            watcher_active=watcher_active,
+        )
+    except Exception as exc:
+        logger.error("vault_status error: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to read vault status: {exc}")
 
 
 @router.get("/graph", response_model=GraphSummary)
 async def graph_summary() -> GraphSummary:
     """Return high-level wikilink graph statistics."""
-    s = vault_graph.summary()
-    return GraphSummary(
-        nodes=s["nodes"],
-        edges=s["edges"],
-        most_linked=s["most_linked"],
-    )
+    try:
+        s = vault_graph.summary()
+        return GraphSummary(
+            nodes=s["nodes"],
+            edges=s["edges"],
+            most_linked=s["most_linked"],
+        )
+    except Exception as exc:
+        logger.error("graph_summary error: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to read graph: {exc}")
 
 
 @router.get("/graph/node", response_model=NodeLinks)
@@ -153,12 +154,48 @@ async def graph_node(
     ),
 ) -> NodeLinks:
     """Return forward links, backlinks, and 2-hop neighbours for a single note."""
-    return NodeLinks(
-        source=source,
-        links=vault_graph.get_links(source),
-        backlinks=vault_graph.get_backlinks(source),
-        related=vault_graph.get_related(source, depth=2),
-    )
+    try:
+        return NodeLinks(
+            source=source,
+            links=vault_graph.get_links(source),
+            backlinks=vault_graph.get_backlinks(source),
+            related=vault_graph.get_related(source, depth=2),
+        )
+    except Exception as exc:
+        logger.error("graph_node error: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to read graph node: {exc}")
+
+
+# ── helpers ───────────────────────────────────────────────────────────────────
+
+def _count_md_files(vault: Path) -> int:
+    """Count .md files in the vault, skipping directories we cannot read."""
+    count = 0
+    try:
+        for item in vault.rglob("*.md"):
+            count += 1
+    except PermissionError:
+        pass  # skip inaccessible subdirectories on Windows
+    except OSError as exc:
+        logger.warning("_count_md_files: OS error during rglob — %s", exc)
+    return count
+
+
+def _check_watcher() -> bool:
+    """Return True if the vault file watcher is currently running."""
+    try:
+        from app.services.obsidian import watcher as _watcher_mod  # noqa: PLC0415
+        w = getattr(_watcher_mod, "_watcher", None)
+        if w is None:
+            return False
+        obs = getattr(w, "_observer", None)
+        if obs is None:
+            return False
+        is_alive = getattr(obs, "is_alive", None)
+        return bool(is_alive()) if callable(is_alive) else False
+    except Exception as exc:
+        logger.warning("_check_watcher: unexpected error — %s", exc)
+        return False
 
 
 # ── background task ───────────────────────────────────────────────────────────

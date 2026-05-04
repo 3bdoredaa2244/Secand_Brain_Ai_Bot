@@ -27,7 +27,7 @@ async def prepare_action(action_type: ActionType, parameters: dict):
 
 @router.get("/actions/pending", response_model=list[ActionRequest])
 async def list_pending():
-    return gate.list_pending()
+    return await gate.list_pending()
 
 
 @router.post("/actions/confirm", response_model=ActionResult)
@@ -40,7 +40,7 @@ async def confirm_action(confirmation: ActionConfirmation):
 
 @router.get("/actions/result/{action_id}", response_model=ActionResult)
 async def get_result(action_id: UUID):
-    result = gate.get_result(action_id)
+    result = await gate.get_result(action_id)
     if result is None:
         raise HTTPException(status_code=404, detail="No result found for this action id")
     return result

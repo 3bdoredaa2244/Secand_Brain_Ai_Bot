@@ -5,8 +5,6 @@ No action is ever executed without explicit approval.
 Phase 2: Redis-backed storage with TTL so pending actions survive restarts
 and expire automatically. Falls back to in-memory if Redis is unavailable.
 """
-import json
-from datetime import datetime
 from uuid import UUID
 
 from app.core.config import get_settings
