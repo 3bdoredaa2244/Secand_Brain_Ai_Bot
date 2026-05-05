@@ -2,7 +2,10 @@
   "permissions": {
     "allow": [
       "Bash(pip show *)",
-      "Bash(py --version)"
+      "Bash(py --version)",
+      "Bash(pip --version)",
+      "Bash(rustc --version)",
+      "Bash(cargo --version)"
     ]
   }
 }

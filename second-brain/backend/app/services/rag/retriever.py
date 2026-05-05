@@ -28,26 +28,40 @@ class VaultRetriever:
     # ── lifecycle ─────────────────────────────────────────────────────────────
 
     def connect(self) -> None:
-        """Initialize ChromaDB connection. Called once at app startup."""
-        try:
-            import chromadb  # noqa: PLC0415
-            self._client = chromadb.HttpClient(
-                host=settings.chroma_host,
-                port=settings.chroma_port,
-            )
-            self._collection = self._client.get_or_create_collection(
-                name=settings.chroma_collection
-            )
-            logger.info(
-                "Retriever: connected to ChromaDB at %s:%s — collection '%s'",
-                settings.chroma_host, settings.chroma_port, settings.chroma_collection,
-            )
-        except Exception as exc:
-            logger.warning(
-                "Retriever: ChromaDB unavailable at %s:%s — %s. "
-                "Start with: docker-compose up chromadb",
-                settings.chroma_host, settings.chroma_port, exc,
-            )
+        """Initialize ChromaDB connection. Called once at app startup.
+
+        chromadb >=1.x eagerly validates the server during get_or_create_collection(),
+        which can block for several seconds when the server is offline.
+        We fire the connection attempt in a daemon thread so startup is instant.
+        Queries received before the thread finishes return [] (graceful degradation).
+        """
+        import threading  # noqa: PLC0415
+
+        def _try_connect() -> None:
+            try:
+                import chromadb as _chroma  # noqa: PLC0415
+                client = _chroma.HttpClient(
+                    host=settings.chroma_host,
+                    port=settings.chroma_port,
+                )
+                collection = client.get_or_create_collection(name=settings.chroma_collection)
+                self._client = client
+                self._collection = collection
+                self._unavailable_logged = False
+                logger.info(
+                    "Retriever: connected to ChromaDB at %s:%s — collection '%s'",
+                    settings.chroma_host, settings.chroma_port, settings.chroma_collection,
+                )
+            except Exception as exc:
+                self._client = None
+                self._collection = None
+                logger.warning(
+                    "Retriever: ChromaDB unavailable at %s:%s — %s. "
+                    "Start with: docker-compose up redis chromadb -d",
+                    settings.chroma_host, settings.chroma_port, exc,
+                )
+
+        threading.Thread(target=_try_connect, daemon=True, name="chroma-connect").start()
 
     # ── write ─────────────────────────────────────────────────────────────────
 

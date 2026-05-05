@@ -53,7 +53,8 @@ services:
       - IS_PERSISTENT=TRUE
       - ANONYMIZED_TELEMETRY=FALSE
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:8000/api/v1/heartbeat || wget -qO- http://localhost:8000/api/v1/heartbeat"]
+      # chromadb >=1.x uses /api/v2/heartbeat — /api/v1/heartbeat returns 404
+      test: ["CMD-SHELL", "curl -sf http://localhost:8000/api/v2/heartbeat || wget -qO- http://localhost:8000/api/v2/heartbeat"]
       interval: 10s
       timeout: 5s
       retries: 10
