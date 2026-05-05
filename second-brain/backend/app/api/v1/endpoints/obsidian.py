@@ -16,6 +16,7 @@ from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.services.obsidian.graph import graph as vault_graph
 from app.services.obsidian.sync import ObsidianSync, SyncResult, sync as default_sync
+from app.services.rag.retriever import retriever as default_retriever
 
 logger = get_logger(__name__)
 settings = get_settings()
@@ -49,6 +50,15 @@ class NodeLinks(BaseModel):
     links: list[str]       # notes this file links to
     backlinks: list[str]   # notes that link to this file
     related: list[str]     # 2-hop neighbourhood
+
+
+class TagSearchResult(BaseModel):
+    source: str
+    title: str
+    tags: list[str]
+    note_type: str
+    score: float
+    snippet: str           # first 200 chars of the matching chunk
 
 
 # ── dependency ────────────────────────────────────────────────────────────────
@@ -164,6 +174,45 @@ async def graph_node(
     except Exception as exc:
         logger.error("graph_node error: %s", exc, exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to read graph node: {exc}")
+
+
+@router.get("/search", response_model=list[TagSearchResult])
+async def search_by_tag(
+    tag: str = Query(..., description="Tag name to filter notes by, e.g. 'health'"),
+    limit: int = Query(default=20, ge=1, le=100),
+) -> list[TagSearchResult]:
+    """Return notes that contain *tag* in their frontmatter tags.
+
+    Uses a semantic search on the tag name then post-filters by metadata,
+    so results are ranked by relevance as well as tag match.
+    """
+    try:
+        # Over-fetch semantically, then narrow to exact tag matches in Python
+        raw = default_retriever.search(query=tag, top_k=min(limit * 5, 100))
+        tag_lower = tag.lower()
+
+        # Deduplicate by source — keep highest-scoring chunk per note
+        seen: dict[str, TagSearchResult] = {}
+        for chunk in raw:
+            raw_tags = chunk.metadata.get("tags", "")
+            note_tags = [t.strip().lower() for t in raw_tags.split(",") if t.strip()]
+            if tag_lower not in note_tags:
+                continue
+            if chunk.source in seen:
+                continue  # already have a higher-scored chunk for this note
+            seen[chunk.source] = TagSearchResult(
+                source=chunk.source,
+                title=chunk.metadata.get("title", chunk.source),
+                tags=[t.strip() for t in raw_tags.split(",") if t.strip()],
+                note_type=chunk.metadata.get("note_type", ""),
+                score=round(chunk.score, 4),
+                snippet=chunk.content[:200],
+            )
+
+        return list(seen.values())[:limit]
+    except Exception as exc:
+        logger.error("search_by_tag error: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Tag search failed: {exc}")
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────

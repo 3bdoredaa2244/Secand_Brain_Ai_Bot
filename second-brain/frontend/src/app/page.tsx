@@ -1,5 +1,5 @@
 "use client";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 interface Chunk {
   id: string;
@@ -9,104 +9,140 @@ interface Chunk {
   metadata: Record<string, string>;
 }
 
-interface QueryResult {
-  query: string;
-  chunks: Chunk[];
-  answer: string | null;
+interface Message {
+  role: "user" | "assistant";
+  content: string;
+  sources?: Chunk[];
+  ts: number;
+}
+
+function fmt(ts: number) {
+  return new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
+function SourceList({ chunks }: { chunks: Chunk[] }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div>
+      <button className="sources-toggle" onClick={() => setOpen(!open)}>
+        {open ? "▾" : "▸"} {chunks.length} source{chunks.length !== 1 ? "s" : ""}
+      </button>
+      {open && chunks.map((c) => (
+        <div key={c.id} className="source-item">
+          <div className="row">
+            <span className="source-path">{c.source}</span>
+            <span className="source-score">score {c.score.toFixed(3)}</span>
+          </div>
+          <div className="source-snippet">{c.content.slice(0, 200)}</div>
+        </div>
+      ))}
+    </div>
+  );
 }
 
 export default function AskPage() {
-  const [text, setText] = useState("");
-  const [topK, setTopK] = useState(5);
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [draft, setDraft] = useState("");
   const [loading, setLoading] = useState(false);
-  const [result, setResult] = useState<QueryResult | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const bottomRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  async function submit(e: React.FormEvent) {
-    e.preventDefault();
-    if (!text.trim()) return;
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages, loading]);
+
+  async function send() {
+    const text = draft.trim();
+    if (!text || loading) return;
+    setDraft("");
+
+    const userMsg: Message = { role: "user", content: text, ts: Date.now() };
+    setMessages((prev) => [...prev, userMsg]);
     setLoading(true);
-    setError(null);
-    setResult(null);
 
     try {
       const res = await fetch("/api/v1/query", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: text.trim(), top_k: topK }),
+        body: JSON.stringify({ text, top_k: 5 }),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      setResult(await res.json());
+      const data = await res.json();
+      const assistantMsg: Message = {
+        role: "assistant",
+        content: data.answer ?? (data.chunks?.length ? "Here are the relevant notes I found:" : "No results found."),
+        sources: data.chunks ?? [],
+        ts: Date.now(),
+      };
+      setMessages((prev) => [...prev, assistantMsg]);
     } catch (err) {
-      setError(String(err));
+      setMessages((prev) => [
+        ...prev,
+        { role: "assistant", content: `Error: ${String(err)}`, ts: Date.now() },
+      ]);
     } finally {
       setLoading(false);
+      setTimeout(() => textareaRef.current?.focus(), 50);
+    }
+  }
+
+  function onKey(e: React.KeyboardEvent<HTMLTextAreaElement>) {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      send();
     }
   }
 
   return (
-    <>
-      <h1>Ask your second brain</h1>
+    <div className="chat-wrap">
+      <div className="chat-messages">
+        {messages.length === 0 && !loading && (
+          <div className="empty-state">
+            <div className="empty-icon">✦</div>
+            <div className="empty-title">Ask your second brain</div>
+            <div className="empty-desc">
+              Ask anything — your Obsidian notes, daily logs, projects, and ideas are all searchable.
+            </div>
+          </div>
+        )}
 
-      <form onSubmit={submit}>
-        <div className="row" style={{ marginBottom: 8 }}>
+        {messages.map((m, i) => (
+          <div key={i} className={m.role === "user" ? "msg-user" : "msg-assistant"}>
+            <div className="msg-meta">{m.role === "user" ? "You" : "Second Brain"} · {fmt(m.ts)}</div>
+            <div className="msg-bubble">{m.content}</div>
+            {m.role === "assistant" && m.sources && m.sources.length > 0 && (
+              <SourceList chunks={m.sources} />
+            )}
+          </div>
+        ))}
+
+        {loading && (
+          <div className="msg-assistant">
+            <div className="msg-meta">Second Brain · now</div>
+            <div className="msg-bubble">
+              <span className="spinner" />
+            </div>
+          </div>
+        )}
+
+        <div ref={bottomRef} />
+      </div>
+
+      <div className="chat-input-area">
+        <div className="chat-input-row">
           <textarea
-            className="grow"
-            rows={3}
-            placeholder="What do you want to know?"
-            value={text}
-            onChange={(e) => setText(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) submit(e as any); }}
+            ref={textareaRef}
+            rows={1}
+            placeholder="Ask anything… (Enter to send, Shift+Enter for newline)"
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={onKey}
           />
-        </div>
-        <div className="row">
-          <label className="dim" style={{ whiteSpace: "nowrap", paddingTop: 10 }}>
-            top_k&nbsp;
-            <input
-              type="number" min={1} max={20} value={topK}
-              onChange={(e) => setTopK(Number(e.target.value))}
-              style={{ width: 60 }}
-            />
-          </label>
-          <div className="grow" />
-          <button type="submit" disabled={loading}>
-            {loading ? "searching…" : "search"}
+          <button className="btn-primary" onClick={send} disabled={loading || !draft.trim()}>
+            {loading ? <span className="spinner" /> : "Send"}
           </button>
         </div>
-      </form>
-
-      {error && <p className="err" style={{ marginTop: 16 }}>{error}</p>}
-
-      {result && (
-        <div style={{ marginTop: 24 }}>
-          {result.answer && (
-            <div className="card" style={{ marginBottom: 20, borderColor: "#7eb8f7" }}>
-              <h2>Answer</h2>
-              <p style={{ lineHeight: 1.7, whiteSpace: "pre-wrap" }}>{result.answer}</p>
-            </div>
-          )}
-
-          <h2>{result.chunks.length} chunk(s) retrieved</h2>
-
-          {result.chunks.map((c) => (
-            <div key={c.id} className="card">
-              <div className="row" style={{ marginBottom: 6 }}>
-                <span className="dim">{c.source}</span>
-                <div className="grow" />
-                <span className="dim">score {c.score.toFixed(3)}</span>
-              </div>
-              <pre style={{ marginBottom: 8 }}>{c.content}</pre>
-              <div>
-                {c.metadata.note_type && <span className="tag">{c.metadata.note_type}</span>}
-                {c.metadata.priority && <span className="tag warn">{c.metadata.priority}</span>}
-                {c.metadata.tags && c.metadata.tags.split(",").filter(Boolean).map((t) => (
-                  <span key={t} className="tag dim">{t}</span>
-                ))}
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-    </>
+      </div>
+    </div>
   );
 }
