@@ -1,3 +1,4 @@
+from typing import Literal
 from pydantic import BaseModel, Field
 
 
@@ -19,3 +20,7 @@ class QueryResponse(BaseModel):
     query: str
     chunks: list[DocumentChunk]
     answer: str | None = None
+    # Which external tool produced the answer (None = vault RAG or LLM fallback)
+    tool_used: str | None = None
+    # Describes where the answer came from — useful for UI badges and debugging
+    answer_source: Literal["vault", "tool", "llm_fallback", "no_results", "error"] = "vault"
