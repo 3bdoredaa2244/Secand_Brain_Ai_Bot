@@ -50,10 +50,14 @@ class Settings(BaseSettings):
     # Whisper model size for local transcription: tiny | base | small | medium
     whisper_model: str = "tiny"
 
-    # ── Phase 2: Integrations ─────────────────────────────────────────────────
+    # Piper TTS voice file (.onnx). Empty = default path under backend/data/piper/
+    piper_voice_path: str = ""
+
+    # ── Phase 2/3: Google integrations (Gmail + Calendar share OAuth) ────────
     gmail_client_id: str = ""
     gmail_client_secret: str = ""
-    gmail_refresh_token: str = ""
+    gmail_refresh_token: str = ""  # legacy — Phase 3 uses encrypted token store
+    google_oauth_redirect_uri: str = "http://localhost:8000/api/v1/auth/google/callback"
     google_calendar_credentials_json: str = ""
 
     # ── Phase 2: Health ───────────────────────────────────────────────────────

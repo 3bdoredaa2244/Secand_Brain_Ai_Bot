@@ -36,17 +36,19 @@ class EmailService(BaseIntegration):
     name = "email"
 
     async def connect(self) -> bool:
-        has_creds = bool(
-            settings.gmail_client_id
-            and settings.gmail_client_secret
-            and settings.gmail_refresh_token
-        )
-        if has_creds:
-            # Phase 3: initialise google-auth client here
-            logger.info("EmailService: real credentials found — stub connect (Phase 3 wires this)")
-            self.mock = False
-        else:
-            logger.info("EmailService: no Gmail credentials — running in mock mode")
+        # Phase 3: real Gmail goes through GmailClient + encrypted token store.
+        # We're "live" when OAuth has been completed (tokens exist on disk),
+        # not when env-var refresh tokens are set.
+        try:
+            from app.services.integrations.gmail.client import gmail_client  # noqa: PLC0415
+            if gmail_client.is_ready():
+                logger.info("EmailService: Gmail OAuth tokens present — using real client")
+                self.mock = False
+            else:
+                logger.info("EmailService: no Gmail tokens — running in mock mode")
+                self.mock = True
+        except Exception as exc:
+            logger.warning("EmailService: Gmail import failed (%s) — mock mode", exc)
             self.mock = True
 
         self._connected = True
@@ -79,8 +81,22 @@ class EmailService(BaseIntegration):
     async def _fetch_real(
         self, max_results: int, query: str = ""
     ) -> list[EmailMessage]:
-        logger.warning("EmailService._fetch_real: not yet implemented — returning empty list")
-        return []
+        """Delegate to GmailClient and adapt EmailModel → legacy EmailMessage."""
+        from app.services.integrations.gmail.client import gmail_client  # noqa: PLC0415
+        gmail_query = query or "in:inbox"
+        models = await gmail_client.list_messages(query=gmail_query, max_results=max_results)
+        return [
+            EmailMessage(
+                id=m.id,
+                subject=m.subject,
+                sender=m.sender,
+                snippet=m.snippet,
+                received_at=m.received_at,
+                labels=m.labels,
+                body=m.body,
+            )
+            for m in models
+        ]
 
 
 # ── mock data ─────────────────────────────────────────────────────────────────

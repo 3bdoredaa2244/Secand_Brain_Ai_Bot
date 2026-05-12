@@ -22,9 +22,23 @@ chromadb>=0.5.15
 # ── Filesystem watcher ────────────────────────────────────────────────────────
 watchdog>=4.0.0
 
+# ── Google APIs (Phase 3 — Gmail + Calendar) ─────────────────────────────────
+# google-auth-oauthlib transitively requires `cryptography` which we also use
+# directly for token encryption.
+google-auth>=2.30.0
+google-auth-oauthlib>=1.2.0
+google-api-python-client>=2.130.0
+cryptography>=42.0.0
+
 # ── Optional: LLM synthesis (uncomment one and set LLM_PROVIDER in .env) ─────
 # anthropic>=0.30.0
 # openai>=1.30.0
 
-# ── Optional: local voice transcription (falls back to stub if not installed) ─
+# ── Voice subsystem (Phase 3 — local STT + TTS) ──────────────────────────────
+# Falls back to stub transcripts / no-op TTS if not installed.
+# faster-whisper is CTranslate2-based — much faster than openai-whisper on CPU.
+# faster-whisper>=1.0.0
+# piper-tts>=1.2.0
+#
+# Legacy: openai-whisper is still supported by /voice/input REST endpoint
 # openai-whisper

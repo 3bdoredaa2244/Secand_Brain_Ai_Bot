@@ -10,13 +10,19 @@ Adding a new tool:
 """
 from app.core.logging import get_logger
 from app.services.tools.base import BaseTool, ToolResult
+from app.services.tools.calendar_tool import CalendarTool
 from app.services.tools.crypto import CryptoTool
+from app.services.tools.gmail import GmailTool
 from app.services.tools.weather import WeatherTool
 
 logger = get_logger(__name__)
 
-# Priority order: more specific tools first
+# Priority order: more specific tools first.
+# Gmail and Calendar precede crypto/weather so e.g. "email me bitcoin prices"
+# doesn't get hijacked by CryptoTool.
 _TOOLS: list[BaseTool] = [
+    GmailTool(),
+    CalendarTool(),
     CryptoTool(),
     WeatherTool(),
 ]
@@ -28,7 +34,7 @@ class IntentRouter:
         for tool in _TOOLS:
             try:
                 if tool.matches(query):
-                    logger.debug("IntentRouter: '%s' → tool '%s'", query[:60], tool.name)
+                    logger.debug("IntentRouter: '%s' -> tool '%s'", query[:60], tool.name)
                     return tool
             except Exception as exc:
                 logger.warning("IntentRouter: tool '%s'.matches() raised — %s", tool.name, exc)
