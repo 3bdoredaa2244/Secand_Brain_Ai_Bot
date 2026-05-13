@@ -1,0 +1,37 @@
+=== Piper ===
+version: unknown
+file:    C:\Users\engAbdulRahmann Reda\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\piper\__init__.py
+module attrs:
+  AudioChunk
+  PhonemeType
+  PiperConfig
+  PiperVoice
+  SynthesisConfig
+  config
+  const
+  phoneme_ids
+  phonemize_espeak
+  tashkeel
+  voice
+
+PiperVoice methods:
+  download_dir
+  espeak_data_dir
+  load
+  phoneme_ids_to_audio
+  phonemes_to_ids
+  phonemize
+  synthesize
+  synthesize_wav
+  tashkeel_diacritizier
+  taskeen_threshold
+  use_tashkeel
+  load(model_path: str | pathlib.Path, config_path: str | pathlib.Path | None = None, use_cuda: bool = False, espeak_data_dir: str | pathlib.Path = WindowsPath('C:/Users/engAbdulRahmann Reda/AppData/Local/Python/pythoncore-3.14-64/Lib/site-packages/piper/espeak-ng-data'), download_dir: str | pathlib.Path | None = None) -> 'PiperVoice'
+  synthesize(self, text: str, syn_config: piper.config.SynthesisConfig | None = None, include_alignments: bool = False) -> Iterable[piper.voice.AudioChunk]
+  ! no method 'synthesize_stream_raw'
+  synthesize_wav(self, text: str, wav_file: wave.Wave_write, syn_config: piper.config.SynthesisConfig | None = None, set_wav_format: bool = True, include_alignments: bool = False) -> list[piper.voice.PhonemeAlignment] | None
+
+=== faster-whisper ===
+version: 1.2.1
+file:    C:\Users\engAbdulRahmann Reda\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\faster_whisper\__init__.py
+WhisperModel.__init__(self, model_size_or_path: str, device: str = 'auto', device_index: int | List[int] = 0, compute_type: str = 'default', cpu_threads: int = 0, num_workers: int = 1, download_root: str | None = None, local_files_only: bool = False, files: dict = None, revision: str | None = None, use_auth_token: str | bool | None = None, **model_kwargs)

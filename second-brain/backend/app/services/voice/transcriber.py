@@ -73,10 +73,21 @@ class Transcriber:
             if self._model is not None:
                 return
             from faster_whisper import WhisperModel  # noqa: PLC0415
-            model_size = settings.whisper_model or "tiny"
-            logger.info("Transcriber: loading faster-whisper '%s' (this may take ~5s)...", model_size)
-            # int8 quantisation gives best CPU speed at minimal quality loss
-            self._model = WhisperModel(model_size, device="cpu", compute_type="int8")
+            model_size = settings.whisper_model or "tiny.en"
+            cpu_threads = max(1, int(getattr(settings, "whisper_cpu_threads", 1)))
+            logger.info(
+                "Transcriber: loading faster-whisper '%s' (int8, %d thread%s)...",
+                model_size, cpu_threads, "s" if cpu_threads != 1 else "",
+            )
+            # int8 quantisation = best CPU latency at minimal quality loss.
+            # cpu_threads + num_workers=1 keep OpenBLAS' allocator under control.
+            self._model = WhisperModel(
+                model_size,
+                device="cpu",
+                compute_type="int8",
+                cpu_threads=cpu_threads,
+                num_workers=1,
+            )
             logger.info("Transcriber: model loaded")
 
     def _transcribe_sync(self, data: bytes, language: str | None) -> str:

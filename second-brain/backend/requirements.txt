@@ -35,10 +35,15 @@ cryptography>=42.0.0
 # openai>=1.30.0
 
 # ── Voice subsystem (Phase 3 — local STT + TTS) ──────────────────────────────
-# Falls back to stub transcripts / no-op TTS if not installed.
-# faster-whisper is CTranslate2-based — much faster than openai-whisper on CPU.
-# faster-whisper>=1.0.0
-# piper-tts>=1.2.0
+# Both packages fall back to stubs / no-op when missing; backend never crashes.
 #
-# Legacy: openai-whisper is still supported by /voice/input REST endpoint
+# STT: faster-whisper (CTranslate2-based, CPU-fast, has cp314 wheels)
+#      Model auto-downloads on first transcription via HuggingFace.
+faster-whisper>=1.2.0
+#
+# TTS: Piper (ONNX, CPU-only by default, ~63 MB voice model)
+#      Voice model auto-downloads on POST /api/v1/voice/setup
+piper-tts>=1.4.0
+#
+# Legacy: openai-whisper still supported by REST /voice/input endpoint
 # openai-whisper

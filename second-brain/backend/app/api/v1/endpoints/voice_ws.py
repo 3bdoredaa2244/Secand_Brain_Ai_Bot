@@ -49,6 +49,63 @@ logger = get_logger(__name__)
 router = APIRouter(prefix="/voice", tags=["voice"])
 
 
+@router.get("/status")
+async def voice_status() -> dict:
+    """Diagnostic info about local voice capabilities.
+
+    Used by the frontend to show a setup banner when STT/TTS are not ready,
+    and by ops to verify that thread-tuning env vars took effect.
+    Never raises — always returns the current state.
+    """
+    import os  # noqa: PLC0415
+    from app.core.config import get_settings  # noqa: PLC0415
+    s = get_settings()
+
+    thread_env = {
+        k: os.environ.get(k, "")
+        for k in ("OPENBLAS_NUM_THREADS", "OMP_NUM_THREADS", "MKL_NUM_THREADS",
+                  "NUMEXPR_NUM_THREADS", "BLIS_NUM_THREADS")
+    }
+    memory_safe = all(thread_env[k] == "1" for k in thread_env if thread_env[k])
+
+    return {
+        "stt_available": transcriber.is_available(),
+        "tts_available": synthesizer.is_available(),
+        "models_loaded": {
+            "stt": transcriber._model is not None,
+            "tts": synthesizer._voice is not None,
+        },
+        "memory_safe": memory_safe,
+        "stt": {
+            "available": transcriber.is_available(),
+            "model": s.whisper_model,
+            "cpu_threads": getattr(s, "whisper_cpu_threads", 1),
+            "compute_type": "int8",
+            "loaded": transcriber._model is not None,
+        },
+        "tts": {
+            "available": synthesizer.is_available(),
+            **synthesizer.voice_info(),
+        },
+        "runtime_threads": thread_env,
+    }
+
+
+@router.post("/setup")
+async def voice_setup() -> dict:
+    """Trigger model downloads for any missing local assets.
+
+    Currently downloads the Piper voice; faster-whisper downloads its model
+    automatically on first transcription call. Safe to call repeatedly.
+    """
+    tts_ok = await synthesizer.ensure_model()
+    return {
+        "tts_model_ready": tts_ok,
+        "tts_path": synthesizer.voice_info()["voice_path"],
+        "note": "Whisper model downloads automatically on first transcription.",
+    }
+
+
 @router.websocket("/stream")
 async def voice_stream(ws: WebSocket) -> None:
     await ws.accept()

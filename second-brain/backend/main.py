@@ -1,3 +1,10 @@
+# MUST be the first import — sets OPENBLAS_NUM_THREADS / OMP_NUM_THREADS / etc.
+# before numpy, ctranslate2, or onnxruntime are loaded anywhere. Prevents an
+# OpenBLAS memory-allocation crash on Windows when faster-whisper, Piper, and
+# chromadb (numpy) all load in the same process.
+from app.core import runtime_tuning
+_voice_tuning = runtime_tuning.apply()
+
 import asyncio
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
@@ -20,6 +27,7 @@ from app.workers.proactive_worker import worker
 setup_logging()
 logger = get_logger(__name__)
 settings = get_settings()
+logger.info("Runtime tuning: %s", _voice_tuning)
 
 # Exposed on the module so the /obsidian/status endpoint can inspect it
 _watcher_mod._watcher = None
@@ -58,6 +66,26 @@ async def lifespan(app: FastAPI):
     # Integrations: attempt real connect; both degrade to mock silently
     await email_service.connect()
     await calendar_service.connect()
+
+    # Voice subsystem readiness check — non-blocking, never crashes
+    try:
+        from app.services.voice.transcriber import transcriber  # noqa: PLC0415
+        from app.services.voice.synthesizer import synthesizer  # noqa: PLC0415
+        stt_ok = transcriber.is_available()
+        tts_ok = synthesizer.is_available()
+        if stt_ok and tts_ok:
+            logger.info("Voice: STT (faster-whisper) and TTS (Piper) both available")
+        elif stt_ok:
+            logger.warning("Voice: STT ready, TTS NOT ready — POST /api/v1/voice/setup to download voice model")
+        elif tts_ok:
+            logger.warning("Voice: TTS ready, STT NOT ready — pip install faster-whisper")
+        else:
+            logger.warning(
+                "Voice: STT and TTS both unavailable. Install: pip install faster-whisper piper-tts. "
+                "Then POST /api/v1/voice/setup to download the default voice."
+            )
+    except Exception as exc:
+        logger.warning("Voice: readiness probe failed (%s) — voice disabled", exc)
 
     # ── vault file watcher (runs in an OS background thread) ──
     loop = asyncio.get_running_loop()

@@ -47,8 +47,14 @@ class Settings(BaseSettings):
     llm_provider: str = "none"
     anthropic_api_key: str = ""
     openai_api_key: str = ""
-    # Whisper model size for local transcription: tiny | base | small | medium
-    whisper_model: str = "tiny"
+    # faster-whisper model name. English-only variants (.en suffix) are ~30%
+    # smaller and faster than their multilingual counterparts.
+    # Recommended for low-memory CPU use: tiny.en | base.en
+    # Multilingual: tiny | base | small | medium
+    whisper_model: str = "tiny.en"
+    # CPU threads for faster-whisper inference. Keep at 1 on Windows to avoid
+    # OpenBLAS allocator contention when chromadb/Piper are also loaded.
+    whisper_cpu_threads: int = 1
 
     # Piper TTS voice file (.onnx). Empty = default path under backend/data/piper/
     piper_voice_path: str = ""

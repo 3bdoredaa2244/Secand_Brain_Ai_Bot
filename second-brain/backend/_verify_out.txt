@@ -1,0 +1,13 @@
+=== Step 1: runtime tuning ===
+  OPENBLAS_NUM_THREADS=1
+  OMP_NUM_THREADS=1
+  MKL_NUM_THREADS=1
+  NUMEXPR_NUM_THREADS=1
+  BLIS_NUM_THREADS=1
+  OMP_WAIT_POLICY=PASSIVE
+
+=== Step 2: import main.py (loads chromadb, gmail, everything) ===
+  main imported OK
+
+=== Step 3: voice subsystem readiness ===
+  STT available: True

@@ -1,7 +1,18 @@
 {
   "permissions": {
     "allow": [
-      "Bash(py -c ' *)"
+      "Bash(py -c ' *)",
+      "Bash(py -c \"import piper; print\\('OK'\\); print\\(piper.__file__\\); print\\(sorted\\(x for x in dir\\(piper\\) if not x.startswith\\('_'\\)\\)\\)\")",
+      "Bash(cat \"/c/Users/ENGABD~1/AppData/Local/Temp/claude/e--work-cloude/6b81ac00-3610-4d0f-a8da-92f697f4806c/tasks/bhmti9q0f.output\" 2>&1)",
+      "Read(//c/Users/ENGABD~1/AppData/Local/Temp/claude/e--work-cloude/6b81ac00-3610-4d0f-a8da-92f697f4806c/tasks/**)",
+      "Bash(stat -c \"%s %n\" /c/Users/ENGABD~1/AppData/Local/Temp/claude/e--work-cloude/6b81ac00-3610-4d0f-a8da-92f697f4806c/tasks/bhmti9q0f.output 2>&1)",
+      "Read(//e/work/cloude/**)",
+      "Bash(py -u -c \"import piper; import sys; sys.stdout.write\\('module: ' + str\\(piper.__file__\\) + chr\\(10\\)\\); sys.stdout.write\\('attrs: ' + ', '.join\\(sorted\\(x for x in dir\\(piper\\) if not x.startswith\\('_'\\)\\)\\) + chr\\(10\\)\\); sys.stdout.flush\\(\\)\")",
+      "Bash(py _inspect_voice.py)",
+      "Bash(cat _voice_inspect.txt)",
+      "Read(//c/Users/engAbdulRahmann Reda/AppData/Local/Python/pythoncore-3.14-64/**)",
+      "Bash(py -c \"import faster_whisper; print\\('faster_whisper OK'\\)\")",
+      "Bash(py -c \"import piper; print\\('piper OK'\\)\")"
     ]
   }
 }
