@@ -1,7 +1,7 @@
 from fastapi import APIRouter
 from app.api.v1.endpoints import (
     health, query, actions, triggers, obsidian, voice, voice_ws,
-    auth, gmail, calendar,
+    auth, gmail, calendar, diagnostics,
 )
 
 router = APIRouter(prefix="/api/v1")
@@ -15,3 +15,4 @@ router.include_router(voice_ws.router)              # WS /voice/stream
 router.include_router(auth.router)
 router.include_router(gmail.router)
 router.include_router(calendar.router)
+router.include_router(diagnostics.router)

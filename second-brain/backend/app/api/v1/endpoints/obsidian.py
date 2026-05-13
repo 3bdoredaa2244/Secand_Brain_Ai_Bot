@@ -1,6 +1,8 @@
 """
 Obsidian vault API endpoints.
 
+GET  /api/v1/obsidian/config        — current vault configuration
+POST /api/v1/obsidian/config        — change vault path (persists across restarts)
 POST /api/v1/obsidian/sync          — full vault re-index (background)
 POST /api/v1/obsidian/sync/file     — re-index a single file (blocking)
 GET  /api/v1/obsidian/status        — vault stats without re-indexing
@@ -14,6 +16,7 @@ from pydantic import BaseModel
 
 from app.core.config import get_settings
 from app.core.logging import get_logger
+from app.core.runtime_config import runtime_config
 from app.services.obsidian.graph import graph as vault_graph
 from app.services.obsidian.sync import ObsidianSync, SyncResult, sync as default_sync
 from app.services.rag.retriever import retriever as default_retriever
@@ -21,6 +24,11 @@ from app.services.rag.retriever import retriever as default_retriever
 logger = get_logger(__name__)
 settings = get_settings()
 router = APIRouter(prefix="/obsidian", tags=["obsidian"])
+
+
+def _vault_root() -> Path:
+    """Active vault root — runtime override wins over .env."""
+    return runtime_config.get_vault_path().resolve()
 
 
 # ── response models ───────────────────────────────────────────────────────────
@@ -61,6 +69,23 @@ class TagSearchResult(BaseModel):
     snippet: str           # first 200 chars of the matching chunk
 
 
+class VaultConfig(BaseModel):
+    vault_path: str
+    exists: bool
+    is_override: bool      # true when /obsidian/config has been used
+    settings_path: str     # what .env / settings.py says
+    subfolders: list[str]  # immediate-child directory names
+    md_files: int          # count of .md files (recursive)
+
+
+class VaultConfigUpdate(BaseModel):
+    vault_path: str
+    create_structure: bool = False  # if True, scaffold notes/projects/meetings/tasks
+
+
+_DEFAULT_SUBFOLDERS = ("notes", "projects", "meetings", "tasks")
+
+
 # ── dependency ────────────────────────────────────────────────────────────────
 
 def get_sync() -> ObsidianSync:
@@ -68,6 +93,81 @@ def get_sync() -> ObsidianSync:
 
 
 # ── endpoints ─────────────────────────────────────────────────────────────────
+
+@router.get("/config", response_model=VaultConfig)
+async def get_vault_config() -> VaultConfig:
+    """Return the currently active vault configuration.
+
+    `is_override` is true when a value has been set via POST /obsidian/config —
+    in that case `vault_path` differs from what's in .env.
+    """
+    active = _vault_root()
+    settings_path = Path(settings.vault_path).expanduser().resolve()
+    override = runtime_config.get("vault_path") is not None
+
+    subfolders: list[str] = []
+    md_count = 0
+    if active.exists():
+        try:
+            subfolders = sorted(p.name for p in active.iterdir() if p.is_dir())
+        except (PermissionError, OSError) as exc:
+            logger.warning("get_vault_config: cannot list %s — %s", active, exc)
+        md_count = _count_md_files(active)
+
+    return VaultConfig(
+        vault_path=str(active),
+        exists=active.exists(),
+        is_override=override,
+        settings_path=str(settings_path),
+        subfolders=subfolders,
+        md_files=md_count,
+    )
+
+
+@router.post("/config", response_model=VaultConfig)
+async def set_vault_config(req: VaultConfigUpdate, background_tasks: BackgroundTasks) -> VaultConfig:
+    """Change the active vault path and optionally scaffold the default folders.
+
+    The new path persists across restarts (stored in backend/data/runtime_config.json).
+    Triggers a background re-sync so ChromaDB picks up the new vault. The file
+    watcher will pick up the new root on the next backend restart.
+    """
+    candidate = Path(req.vault_path).expanduser()
+
+    # Optional scaffold — useful when pointing at a fresh directory like D:\\SecondBrainVault
+    if req.create_structure:
+        try:
+            candidate.mkdir(parents=True, exist_ok=True)
+            for name in _DEFAULT_SUBFOLDERS:
+                (candidate / name).mkdir(exist_ok=True)
+            logger.info("set_vault_config: scaffolded %s with %s", candidate, _DEFAULT_SUBFOLDERS)
+        except OSError as exc:
+            raise HTTPException(status_code=400, detail=f"Cannot create {candidate}: {exc}")
+
+    if not candidate.exists():
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Vault path '{candidate}' does not exist. "
+                "Re-send with create_structure=true to scaffold it."
+            ),
+        )
+    if not candidate.is_dir():
+        raise HTTPException(status_code=400, detail=f"'{candidate}' is not a directory")
+
+    runtime_config.set_vault_path(candidate)
+    logger.info("set_vault_config: vault path → %s", candidate)
+
+    # Point the in-process loader at the new vault and re-sync in the background.
+    try:
+        from app.services.obsidian.loader import loader as _loader  # noqa: PLC0415
+        _loader.set_vault_path(candidate)
+    except Exception as exc:
+        logger.warning("set_vault_config: could not update loader — %s", exc)
+
+    background_tasks.add_task(_run_full_sync)
+    return await get_vault_config()
+
 
 @router.post("/sync", response_model=SyncResponse, status_code=202)
 async def sync_vault(background_tasks: BackgroundTasks) -> SyncResponse:
@@ -83,7 +183,7 @@ async def sync_vault(background_tasks: BackgroundTasks) -> SyncResponse:
         chunks_indexed=0,
         errors=0,
         message=(
-            f"Full sync started in background for vault '{settings.vault_path}'. "
+            f"Full sync started in background for vault '{_vault_root()}'. "
             "Check server logs for progress."
         ),
     )
@@ -102,7 +202,7 @@ async def sync_file(
     Use this after editing a specific note and wanting instant results
     without waiting for the file watcher debounce.
     """
-    full_path = (settings.vault_path / path).resolve()
+    full_path = (_vault_root() / path).resolve()
 
     if not full_path.exists():
         raise HTTPException(status_code=404, detail=f"File not found: {path}")
@@ -124,7 +224,7 @@ async def sync_file(
 async def vault_status() -> VaultStatus:
     """Return vault statistics without modifying the index."""
     try:
-        vault = settings.vault_path.resolve()
+        vault = _vault_root()
         exists = vault.exists()
         md_count = _count_md_files(vault) if exists else 0
 
@@ -263,7 +363,7 @@ async def _run_full_sync() -> None:
 # ── guard ─────────────────────────────────────────────────────────────────────
 
 def _is_inside_vault(path: Path) -> bool:
-    vault = settings.vault_path.resolve()
+    vault = _vault_root()
     try:
         path.relative_to(vault)
         return True

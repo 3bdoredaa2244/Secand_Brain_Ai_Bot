@@ -12,6 +12,7 @@ from pathlib import Path
 
 from app.core.config import get_settings
 from app.core.logging import get_logger
+from app.core.runtime_config import runtime_config
 from app.services.obsidian.parser import ObsidianNote, parse_note
 from app.services.rag.indexer import RawChunk, _chunk_text, CHUNK_SIZE, CHUNK_OVERLAP
 
@@ -27,7 +28,18 @@ def _s(v) -> str:
 
 class ObsidianLoader:
     def __init__(self, vault_path: Path | None = None) -> None:
-        self.vault_path = (vault_path or settings.vault_path).resolve()
+        # Stored as None so reads always pick up the latest runtime override.
+        self._explicit_path: Path | None = Path(vault_path) if vault_path else None
+
+    @property
+    def vault_path(self) -> Path:
+        if self._explicit_path is not None:
+            return self._explicit_path.resolve()
+        return runtime_config.get_vault_path().resolve()
+
+    def set_vault_path(self, path: Path) -> None:
+        """Switch the active vault root (used by /obsidian/config)."""
+        self._explicit_path = Path(path)
 
     # ── bulk load ─────────────────────────────────────────────────────────────
 

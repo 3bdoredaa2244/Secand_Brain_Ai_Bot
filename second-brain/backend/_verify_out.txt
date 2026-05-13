@@ -11,3 +11,13 @@
 
 === Step 3: voice subsystem readiness ===
   STT available: True
+  TTS available: True
+  TTS voice info: {'voice_name': 'en_US-lessac-medium', 'voice_path': 'E:\\work\\cloude\\second-brain\\backend\\data\\piper\\en_US-lessac-medium.onnx', 'voice_exists': False, 'loaded': False, 'sample_rate': 22050}
+
+=== Step 4: route registration ===
+  [APIRoute] /api/v1/voice/input
+  [APIRoute] /api/v1/voice/status
+  [APIRoute] /api/v1/voice/setup
+  [APIWebSocketRoute] /api/v1/voice/stream
+
+=== All checks passed — no OpenBLAS crash ===

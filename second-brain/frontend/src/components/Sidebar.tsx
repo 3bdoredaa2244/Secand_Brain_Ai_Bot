@@ -2,10 +2,11 @@
 import { usePathname } from "next/navigation";
 
 const LINKS = [
-  { href: "/",         icon: "✦", label: "Ask"      },
-  { href: "/actions",  icon: "⚡", label: "Actions"  },
-  { href: "/obsidian", icon: "◈",  label: "Obsidian" },
-  { href: "/voice",    icon: "◎",  label: "Voice"    },
+  { href: "/",            icon: "✦", label: "Ask"         },
+  { href: "/actions",     icon: "⚡", label: "Actions"     },
+  { href: "/obsidian",    icon: "◈",  label: "Obsidian"    },
+  { href: "/voice",       icon: "◎",  label: "Voice"       },
+  { href: "/diagnostics", icon: "❖",  label: "Diagnostics" },
 ];
 
 export function Sidebar() {

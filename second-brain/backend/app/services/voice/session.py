@@ -35,6 +35,7 @@ from typing import AsyncIterator, Literal
 
 from app.core.logging import get_logger
 from app.models.query import QueryRequest
+from app.services.agent.conversation_memory import conversation_memory
 from app.services.agent.engine import agent_engine
 from app.services.voice.synthesizer import synthesizer
 from app.services.voice.transcriber import transcriber
@@ -115,7 +116,6 @@ class VoiceSession:
                 await self._set_state("idle")
                 return
             await self._emit({"type": "transcript", "text": transcript, "is_final": True})
-            self._history.append({"role": "user", "content": transcript, "ts": time.time()})
 
             # ── 2. Agent ─────────────────────────────────────────────────────
             await self._run_turn_from_text(transcript, _skip_state_set=True, t0=t0)
@@ -136,10 +136,20 @@ class VoiceSession:
             if not _skip_state_set:
                 await self._set_state("thinking")
 
-            # Agent query — the agent never raises, always returns a response
-            resp = await agent_engine.query(QueryRequest(text=text, top_k=5))
+            # Record the user side of the turn before invoking the agent so it
+            # can see the message in its own context window if needed.
+            self._history.append({"role": "user", "content": text, "ts": time.time()})
+            await conversation_memory.append(self.id, "user", text)
+
+            # Agent query — the agent never raises, always returns a response.
+            # Pass the session id so the engine can fetch recent turns for context.
+            resp = await agent_engine.query(
+                QueryRequest(text=text, top_k=5),
+                session_id=self.id,
+            )
             answer = resp.answer or "I don't have an answer for that."
             self._history.append({"role": "assistant", "content": answer, "ts": time.time()})
+            await conversation_memory.append(self.id, "assistant", answer)
             await self._emit({
                 "type": "response",
                 "text": answer,

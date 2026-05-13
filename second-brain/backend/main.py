@@ -13,7 +13,9 @@ from fastapi.responses import JSONResponse
 
 from app.core.config import get_settings
 from app.core.logging import setup_logging, get_logger
+from app.core.runtime_config import runtime_config
 from app.api.v1.router import router
+from app.services.agent.conversation_memory import conversation_memory
 from app.services.confirmation_gate.gate import gate
 from app.services.integrations.calendar import calendar_service
 from app.services.integrations.email import email_service
@@ -63,6 +65,9 @@ async def lifespan(app: FastAPI):
     # Gate gets its own Redis connection (separate from the stream consumer)
     await gate.connect()
 
+    # Conversation memory — separate Redis connection; falls back to in-memory.
+    await conversation_memory.connect()
+
     # Integrations: attempt real connect; both degrade to mock silently
     await email_service.connect()
     await calendar_service.connect()
@@ -88,9 +93,17 @@ async def lifespan(app: FastAPI):
         logger.warning("Voice: readiness probe failed (%s) — voice disabled", exc)
 
     # ── vault file watcher (runs in an OS background thread) ──
+    vault_root = runtime_config.get_vault_path().resolve()
+    if not vault_root.exists():
+        logger.warning(
+            "Vault path %s does not exist — create it or change via "
+            "POST /api/v1/obsidian/config",
+            vault_root,
+        )
+
     loop = asyncio.get_running_loop()
     vault_watcher = VaultWatcher(
-        vault_path=settings.vault_path.resolve(),
+        vault_path=vault_root,
         sync_fn=obsidian_sync.sync_file,
         remove_fn=obsidian_sync.remove_file,
     )

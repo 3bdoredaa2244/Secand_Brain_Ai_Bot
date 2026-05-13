@@ -21,6 +21,7 @@ Guarantee: query() NEVER raises. Every code path returns a valid QueryResponse.
 from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.models.query import DocumentChunk, QueryRequest, QueryResponse
+from app.services.agent.conversation_memory import conversation_memory
 from app.services.rag.memory import MemoryEngine, memory_engine as default_memory
 from app.services.rag.retriever import RetrievedChunk, VaultRetriever, retriever as default_retriever
 from app.services.tools.router import IntentRouter, router as default_router
@@ -42,10 +43,16 @@ class AgentEngine:
 
     # ── public interface ──────────────────────────────────────────────────────
 
-    async def query(self, request: QueryRequest) -> QueryResponse:
-        """Handle a user query. Guaranteed to return a valid response — never raises."""
+    async def query(self, request: QueryRequest, *, session_id: str | None = None) -> QueryResponse:
+        """Handle a user query. Guaranteed to return a valid response — never raises.
+
+        `session_id` opts in to conversation memory: when set, the last few
+        user/assistant turns from that session are folded into the LLM prompt
+        so follow-up questions ("yes do it", "what about tomorrow?") resolve
+        correctly.
+        """
         try:
-            return await self._route(request)
+            return await self._route(request, session_id=session_id)
         except Exception as exc:
             logger.error(
                 "AgentEngine: unhandled error for query '%s': %s",
@@ -61,7 +68,7 @@ class AgentEngine:
 
     # ── routing logic ─────────────────────────────────────────────────────────
 
-    async def _route(self, request: QueryRequest) -> QueryResponse:
+    async def _route(self, request: QueryRequest, *, session_id: str | None = None) -> QueryResponse:
         # ── Step 1: external tool ─────────────────────────────────────────────
         tool_name, tool_result = await self._router.run_tool(request.text)
         if tool_result is not None:
@@ -82,8 +89,13 @@ class AgentEngine:
             where=where,
         )
 
+        # Pull recent conversation context once — exclude the in-flight user turn.
+        history_block = await _recent_history_block(session_id)
+
         if chunks_raw:
-            answer = await self._memory.reason(request.text, chunks_raw)
+            answer = await self._memory.reason(
+                request.text, chunks_raw, history=history_block,
+            )
             logger.info(
                 "AgentEngine: vault RAG returned %d chunk(s), LLM=%s",
                 len(chunks_raw), answer is not None,
@@ -98,7 +110,7 @@ class AgentEngine:
 
         # ── Step 3: LLM general fallback ──────────────────────────────────────
         if settings.has_llm():
-            answer = await self._memory.llm_fallback(request.text)
+            answer = await self._memory.llm_fallback(request.text, history=history_block)
             if answer:
                 logger.info("AgentEngine: answered via LLM general fallback")
                 return QueryResponse(
@@ -126,6 +138,19 @@ class AgentEngine:
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
+
+async def _recent_history_block(session_id: str | None, *, max_turns: int = 6) -> str:
+    """Last few turns rendered for LLM prompting. Empty when there's no session."""
+    if not session_id:
+        return ""
+    turns = await conversation_memory.history(session_id, limit=max_turns)
+    if not turns:
+        return ""
+    # Drop the trailing user turn — that's the current question being answered.
+    if turns and turns[-1].get("role") == "user":
+        turns = turns[:-1]
+    return conversation_memory.format_for_prompt(turns)
+
 
 def _to_doc(c: RetrievedChunk) -> DocumentChunk:
     return DocumentChunk(

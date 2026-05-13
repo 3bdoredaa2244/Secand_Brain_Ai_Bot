@@ -47,29 +47,39 @@ class MemoryEngine:
     ) -> list[RetrievedChunk]:
         return self._retriever.search(query, top_k, where=where)
 
-    async def reason(self, query: str, chunks: list[RetrievedChunk]) -> str | None:
-        """Synthesise an answer from vault chunks using the configured LLM."""
+    async def reason(
+        self,
+        query: str,
+        chunks: list[RetrievedChunk],
+        *,
+        history: str = "",
+    ) -> str | None:
+        """Synthesise an answer from vault chunks using the configured LLM.
+
+        `history` is a pre-formatted transcript of recent turns — passed
+        verbatim into the user message so the LLM can resolve follow-ups.
+        """
         if not chunks or not settings.has_llm():
             return None
         if settings.llm_provider == "anthropic":
-            return await self._reason_anthropic(query, chunks)
+            return await self._reason_anthropic(query, chunks, history)
         if settings.llm_provider == "openai":
-            return await self._reason_openai(query, chunks)
+            return await self._reason_openai(query, chunks, history)
         return None
 
-    async def llm_fallback(self, query: str) -> str | None:
+    async def llm_fallback(self, query: str, *, history: str = "") -> str | None:
         """Answer from general knowledge when vault has no relevant chunks."""
         if not settings.has_llm():
             return None
         if settings.llm_provider == "anthropic":
-            return await self._fallback_anthropic(query)
+            return await self._fallback_anthropic(query, history)
         if settings.llm_provider == "openai":
-            return await self._fallback_openai(query)
+            return await self._fallback_openai(query, history)
         return None
 
     # ── Anthropic ─────────────────────────────────────────────────────────────
 
-    async def _fallback_anthropic(self, query: str) -> str | None:
+    async def _fallback_anthropic(self, query: str, history: str = "") -> str | None:
         try:
             import anthropic  # noqa: PLC0415
         except ImportError:
@@ -80,14 +90,14 @@ class MemoryEngine:
                 model="claude-sonnet-4-6",
                 max_tokens=512,
                 system=_FALLBACK_SYSTEM_PROMPT,
-                messages=[{"role": "user", "content": query}],
+                messages=[{"role": "user", "content": _with_history(query, history)}],
             )
             return msg.content[0].text
         except Exception as exc:
             logger.error("MemoryEngine: Anthropic fallback failed — %s", exc)
             return None
 
-    async def _reason_anthropic(self, query: str, chunks: list[RetrievedChunk]) -> str | None:
+    async def _reason_anthropic(self, query: str, chunks: list[RetrievedChunk], history: str = "") -> str | None:
         try:
             import anthropic  # noqa: PLC0415
         except ImportError:
@@ -95,6 +105,10 @@ class MemoryEngine:
             return None
 
         context = _build_context(chunks)
+        user_content = (
+            f"Context from my knowledge base:\n\n{context}"
+            f"\n\n---\nQuestion: {query}"
+        )
         try:
             client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
             msg = await client.messages.create(
@@ -102,13 +116,7 @@ class MemoryEngine:
                 max_tokens=1024,
                 system=_SYSTEM_PROMPT,
                 messages=[
-                    {
-                        "role": "user",
-                        "content": (
-                            f"Context from my knowledge base:\n\n{context}"
-                            f"\n\n---\nQuestion: {query}"
-                        ),
-                    }
+                    {"role": "user", "content": _with_history(user_content, history)},
                 ],
             )
             return msg.content[0].text
@@ -118,7 +126,7 @@ class MemoryEngine:
 
     # ── OpenAI ────────────────────────────────────────────────────────────────
 
-    async def _fallback_openai(self, query: str) -> str | None:
+    async def _fallback_openai(self, query: str, history: str = "") -> str | None:
         try:
             import openai as _openai  # noqa: PLC0415
         except ImportError:
@@ -130,7 +138,7 @@ class MemoryEngine:
                 max_tokens=512,
                 messages=[
                     {"role": "system", "content": _FALLBACK_SYSTEM_PROMPT},
-                    {"role": "user", "content": query},
+                    {"role": "user", "content": _with_history(query, history)},
                 ],
             )
             return resp.choices[0].message.content
@@ -138,7 +146,7 @@ class MemoryEngine:
             logger.error("MemoryEngine: OpenAI fallback failed — %s", exc)
             return None
 
-    async def _reason_openai(self, query: str, chunks: list[RetrievedChunk]) -> str | None:
+    async def _reason_openai(self, query: str, chunks: list[RetrievedChunk], history: str = "") -> str | None:
         try:
             import openai as _openai  # noqa: PLC0415
         except ImportError:
@@ -146,6 +154,10 @@ class MemoryEngine:
             return None
 
         context = _build_context(chunks)
+        user_content = (
+            f"Context from my knowledge base:\n\n{context}"
+            f"\n\n---\nQuestion: {query}"
+        )
         try:
             client = _openai.AsyncOpenAI(api_key=settings.openai_api_key)
             resp = await client.chat.completions.create(
@@ -153,13 +165,7 @@ class MemoryEngine:
                 max_tokens=1024,
                 messages=[
                     {"role": "system", "content": _SYSTEM_PROMPT},
-                    {
-                        "role": "user",
-                        "content": (
-                            f"Context from my knowledge base:\n\n{context}"
-                            f"\n\n---\nQuestion: {query}"
-                        ),
-                    },
+                    {"role": "user", "content": _with_history(user_content, history)},
                 ],
             )
             return resp.choices[0].message.content
@@ -173,6 +179,13 @@ def _build_context(chunks: list[RetrievedChunk]) -> str:
     for i, c in enumerate(chunks, 1):
         parts.append(f"[{i}] Source: {c.source}\n{c.content}")
     return "\n\n".join(parts)
+
+
+def _with_history(content: str, history: str) -> str:
+    """Prepend a recent-conversation block when present."""
+    if not history:
+        return content
+    return f"Recent conversation:\n{history}\n\n---\n{content}"
 
 
 memory_engine = MemoryEngine()  # singleton
