@@ -72,6 +72,32 @@ async def lifespan(app: FastAPI):
     await email_service.connect()
     await calendar_service.connect()
 
+    # Google OAuth: log readiness so missing setup is obvious in logs.
+    try:
+        from app.services.integrations.gmail.oauth import oauth_handler  # noqa: PLC0415
+        if not oauth_handler.is_configured():
+            logger.warning(
+                "Google OAuth: GMAIL_CLIENT_ID / GMAIL_CLIENT_SECRET not set in .env — "
+                "Gmail + Calendar will run in mock mode. See SETUP_WINDOWS.md."
+            )
+        else:
+            info = oauth_handler.token_info()
+            if not info.get("authorized"):
+                logger.info(
+                    "Google OAuth: credentials configured, no tokens yet. "
+                    "Visit %s to authorize.",
+                    "http://localhost:8000/api/v1/auth/google/login",
+                )
+            else:
+                logger.info(
+                    "Google OAuth: tokens loaded (scopes=%d, refresh_token=%s, expires_in=%ss)",
+                    info.get("scope_count", 0),
+                    "yes" if info.get("has_refresh_token") else "no",
+                    info.get("expires_in_seconds"),
+                )
+    except Exception as exc:
+        logger.warning("Google OAuth: readiness probe failed — %s", exc)
+
     # Voice subsystem readiness check — non-blocking, never crashes
     try:
         from app.services.voice.transcriber import transcriber  # noqa: PLC0415

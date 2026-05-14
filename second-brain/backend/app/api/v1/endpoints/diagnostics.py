@@ -156,18 +156,32 @@ def _watcher_alive() -> bool:
 
 
 async def _gmail_section() -> dict:
-    authorized = token_store.has_tokens()
-    email = None
-    if authorized:
+    token_info = oauth_handler.token_info()
+    has_tokens = token_info.get("authorized", False)
+
+    email: str | None = None
+    api_live = False
+    if has_tokens:
         try:
             profile = await gmail_client.get_profile()
             email = (profile or {}).get("emailAddress")
+            api_live = profile is not None
         except Exception as exc:
             logger.debug("diagnostics.gmail: profile fetch failed — %s", exc)
+
+    # Serialize datetime for JSON — strip out the python datetime object.
+    expires_at = token_info.get("expires_at")
     return {
         "oauth_configured": oauth_handler.is_configured(),
-        "authorized": authorized,
+        "has_tokens": has_tokens,
+        "authorized": api_live,
         "email": email,
+        "scopes": token_info.get("scopes", []),
+        "scope_count": token_info.get("scope_count", 0),
+        "has_refresh_token": token_info.get("has_refresh_token", False),
+        "expires_at": expires_at.isoformat() if expires_at else None,
+        "expires_in_seconds": token_info.get("expires_in_seconds"),
+        "needs_refresh": token_info.get("needs_refresh", False),
     }
 
 

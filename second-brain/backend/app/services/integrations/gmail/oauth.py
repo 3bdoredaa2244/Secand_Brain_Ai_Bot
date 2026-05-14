@@ -23,13 +23,16 @@ from app.services.integrations.gmail.token_store import token_store
 logger = get_logger(__name__)
 settings = get_settings()
 
-# Scopes — gmail.modify covers archive/label; gmail.send covers sending.
-# Calendar scopes added here too so a single consent grants both integrations.
+# Scopes — gmail.modify covers archive/label; gmail.send + gmail.compose cover drafts/sending.
+# Calendar.events is technically a subset of `calendar`, listed explicitly so the consent
+# screen makes the event-write permission visible.
 SCOPES: list[str] = [
     "https://www.googleapis.com/auth/gmail.readonly",
     "https://www.googleapis.com/auth/gmail.send",
     "https://www.googleapis.com/auth/gmail.modify",
+    "https://www.googleapis.com/auth/gmail.compose",
     "https://www.googleapis.com/auth/calendar",
+    "https://www.googleapis.com/auth/calendar.events",
     "openid", "email", "profile",
 ]
 
@@ -98,6 +101,44 @@ class GoogleOAuth:
 
     def disconnect(self) -> None:
         token_store.clear()
+
+    # ── diagnostics ───────────────────────────────────────────────────────────
+
+    def token_info(self) -> dict:
+        """Return token metadata for /auth/google/status and diagnostics.
+
+        Never raises; returns ``authorized=False`` on any failure. The access
+        token itself is intentionally NOT returned.
+        """
+        token_dict = token_store.load()
+        if not token_dict:
+            return {"authorized": False}
+
+        scopes = list(token_dict.get("scopes") or [])
+        expiry_raw = token_dict.get("expiry")
+        expires_at = None
+        expires_in = None
+        if expiry_raw:
+            try:
+                from datetime import datetime, timezone  # noqa: PLC0415
+                # google-auth stores expiry as a naive UTC iso string.
+                dt = datetime.fromisoformat(expiry_raw.replace("Z", "+00:00"))
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                expires_at = dt
+                expires_in = int((dt - datetime.now(tz=timezone.utc)).total_seconds())
+            except Exception as exc:
+                logger.debug("GoogleOAuth.token_info: cannot parse expiry — %s", exc)
+
+        return {
+            "authorized": True,
+            "has_refresh_token": bool(token_dict.get("refresh_token")),
+            "scopes": scopes,
+            "scope_count": len(scopes),
+            "expires_at": expires_at,
+            "expires_in_seconds": expires_in,
+            "needs_refresh": expires_in is not None and expires_in <= 60,
+        }
 
     # ── internal ──────────────────────────────────────────────────────────────
 

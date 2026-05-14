@@ -88,8 +88,15 @@ async def callback(code: str | None = Query(default=None), error: str | None = Q
 
 @router.get("/status", response_model=GmailAuthStatus)
 async def status() -> GmailAuthStatus:
-    """Tell the frontend whether OAuth is complete."""
-    if not token_store.has_tokens():
+    """Tell the frontend whether OAuth is complete.
+
+    Returns the connected account email, the granted scopes, and the access
+    token's expiry. `authorized=true` requires that we can both load tokens
+    AND make at least one successful Gmail profile call — that guards against
+    the case where tokens are present but have been revoked at Google.
+    """
+    info = oauth_handler.token_info()
+    if not info.get("authorized"):
         return GmailAuthStatus(authorized=False)
 
     profile = await gmail_client.get_profile()
@@ -97,7 +104,8 @@ async def status() -> GmailAuthStatus:
     return GmailAuthStatus(
         authorized=profile is not None,
         email=email,
-        scopes=[],  # populated once we parse from creds
+        expires_at=info.get("expires_at"),
+        scopes=info.get("scopes", []),
     )
 
 

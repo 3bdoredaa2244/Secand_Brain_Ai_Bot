@@ -1,5 +1,6 @@
 from functools import lru_cache
 from pathlib import Path
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -63,7 +64,12 @@ class Settings(BaseSettings):
     gmail_client_id: str = ""
     gmail_client_secret: str = ""
     gmail_refresh_token: str = ""  # legacy — Phase 3 uses encrypted token store
-    google_oauth_redirect_uri: str = "http://localhost:8000/api/v1/auth/google/callback"
+    # Accept either GOOGLE_REDIRECT_URI (preferred, matches Google Cloud Console
+    # field name) or the historical GOOGLE_OAUTH_REDIRECT_URI.
+    google_oauth_redirect_uri: str = Field(
+        default="http://localhost:8000/api/v1/auth/google/callback",
+        validation_alias=AliasChoices("GOOGLE_REDIRECT_URI", "GOOGLE_OAUTH_REDIRECT_URI"),
+    )
     google_calendar_credentials_json: str = ""
 
     # ── Phase 2: Health ───────────────────────────────────────────────────────
