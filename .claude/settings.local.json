@@ -5,7 +5,8 @@
       "Bash(py --version)",
       "Bash(pip --version)",
       "Bash(rustc --version)",
-      "Bash(cargo --version)"
+      "Bash(cargo --version)",
+      "Bash(py -c ' *)"
     ]
   }
 }

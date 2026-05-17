@@ -75,6 +75,8 @@ async def lifespan(app: FastAPI):
     # Google OAuth: log readiness so missing setup is obvious in logs.
     try:
         from app.services.integrations.gmail.oauth import oauth_handler  # noqa: PLC0415
+        # Connect the PKCE verifier store to Redis. Failures fall back to memory.
+        await oauth_handler.connect()
         if not oauth_handler.is_configured():
             logger.warning(
                 "Google OAuth: GMAIL_CLIENT_ID / GMAIL_CLIENT_SECRET not set in .env — "

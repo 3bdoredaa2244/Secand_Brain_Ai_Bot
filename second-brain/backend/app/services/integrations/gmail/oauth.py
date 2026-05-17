@@ -1,5 +1,5 @@
 """
-Google OAuth 2.0 flow for Gmail + Calendar.
+Google OAuth 2.0 flow for Gmail + Calendar (PKCE-aware).
 
 Both integrations share a single OAuth client (one consent screen, one refresh
 token). The user clicks "Connect Google" once and both Gmail + Calendar work.
@@ -7,14 +7,33 @@ token). The user clicks "Connect Google" once and both Gmail + Calendar work.
 Flow
 ────
 1. Frontend opens /api/v1/auth/google/login in a popup
-2. We build an authorisation URL and 302-redirect to Google
-3. Google redirects back to /api/v1/auth/google/callback?code=...
-4. We exchange the code for an access + refresh token, encrypt + store
-5. Backend serves a self-closing HTML page; frontend polls /status
+2. build_auth_url() builds an authorisation URL WITH a PKCE code_challenge
+   and stores the matching code_verifier server-side, keyed by `state`.
+3. Google redirects back to /api/v1/auth/google/callback?code=...&state=...
+4. exchange_code() retrieves the verifier by `state`, attaches it to a fresh
+   Flow, and exchanges the code for tokens. Verifier is deleted on use.
+5. Tokens are encrypted and persisted via TokenStore; the popup self-closes.
 
-The same credentials are used for Calendar (Phase 3 Part 2).
+Why this exists
+───────────────
+google-auth-oauthlib 1.4+ enables PKCE automatically
+(`autogenerate_code_verifier=True`), so the authorization request always
+sends a `code_challenge`. The token exchange therefore MUST present the
+matching `code_verifier`. Because /login and /callback are different
+request lifecycles (and possibly different processes after reload), the
+verifier has to be persisted across them.
+
+Storage
+───────
+Redis when available (key `oauth:pkce:<state>`, TTL 600s). In-memory
+fallback keyed by state, evicted lazily by expiry. The verifier is a
+short-lived secret — it has no value once consumed.
 """
 from __future__ import annotations
+
+import asyncio
+import secrets
+import time
 
 from app.core.config import get_settings
 from app.core.logging import get_logger
@@ -37,36 +56,128 @@ SCOPES: list[str] = [
 ]
 
 
+_PKCE_PREFIX = "oauth:pkce:"
+_PKCE_TTL_SECONDS = 600  # 10 minutes — generous window for the consent screen
+
+
 class GoogleOAuth:
-    """Handles authorisation URL construction + code exchange."""
+    """Handles authorisation URL construction + PKCE-aware code exchange."""
+
+    def __init__(self) -> None:
+        self._redis = None
+        # In-memory fallback: state -> (verifier, expires_at_epoch_seconds).
+        # Only used when Redis is unreachable.
+        self._mem_store: dict[str, tuple[str, float]] = {}
+        self._mem_lock = asyncio.Lock()
+
+    # ── lifecycle ─────────────────────────────────────────────────────────────
+
+    async def connect(self) -> None:
+        """Best-effort Redis connection for PKCE verifier storage.
+
+        Called from main.py lifespan. Failures degrade silently to the
+        in-memory store, which is fine for a single-process dev setup
+        but loses state across `--reload` restarts.
+        """
+        try:
+            import redis.asyncio as aioredis  # noqa: PLC0415
+            client = await aioredis.from_url(settings.redis_url, decode_responses=True)
+            await client.ping()
+            self._redis = client
+            logger.info("GoogleOAuth: PKCE store connected to Redis")
+        except Exception as exc:
+            logger.warning(
+                "GoogleOAuth: Redis unavailable (%s) — PKCE store using in-memory fallback "
+                "(verifiers will not survive backend restarts)",
+                exc,
+            )
 
     def is_configured(self) -> bool:
         return bool(settings.gmail_client_id and settings.gmail_client_secret)
 
-    def build_auth_url(self, state: str = "") -> str:
-        """Return the consent-screen URL for the frontend popup."""
+    # ── login / callback ─────────────────────────────────────────────────────
+
+    async def build_auth_url(self, state: str = "") -> str:
+        """Build the consent-screen URL and persist the PKCE verifier.
+
+        `state` is auto-generated if empty. Google echoes it back to the
+        callback so we can look up the verifier.
+        """
         if not self.is_configured():
             raise RuntimeError(
                 "Google OAuth not configured — set GMAIL_CLIENT_ID and "
                 "GMAIL_CLIENT_SECRET in .env"
             )
+        if not state:
+            state = secrets.token_urlsafe(24)
+
         flow = self._build_flow()
-        url, _ = flow.authorization_url(
+        # google-auth-oauthlib 1.4+ defaults this to True; we set it explicitly
+        # so the behaviour is robust if upstream changes the default again.
+        flow.autogenerate_code_verifier = True
+
+        url, returned_state = flow.authorization_url(
             access_type="offline",       # required to receive a refresh token
             prompt="consent",            # forces refresh-token issuance even on re-auth
             include_granted_scopes="true",
             state=state,
         )
+        verifier = flow.code_verifier
+        if not verifier:
+            # PKCE was disabled somehow — log loudly. The flow will still work
+            # if Google doesn't enforce PKCE, but if it does, the callback fails.
+            logger.warning("GoogleOAuth: no code_verifier on flow after authorization_url")
+        else:
+            await self._store_verifier(returned_state, verifier)
+            logger.info(
+                "GoogleOAuth: auth started (state=%s, verifier stored in %s)",
+                _short(returned_state),
+                "redis" if self._redis is not None else "memory",
+            )
         return url
 
-    def exchange_code(self, code: str) -> dict:
-        """Exchange an auth code for tokens and persist them. Returns token dict."""
+    async def exchange_code(self, code: str, state: str | None) -> dict:
+        """Exchange the authorization code for tokens, using the stored PKCE verifier.
+
+        Raises:
+            ValueError: state is missing or its verifier has expired / been consumed.
+            Exception: token exchange itself failed (network, invalid grant, ...).
+        """
+        if not state:
+            raise ValueError(
+                "Missing state parameter in callback — restart at /api/v1/auth/google/login"
+            )
+        verifier = await self._pop_verifier(state)
+        if verifier is None:
+            raise ValueError(
+                "OAuth verifier missing or expired (state=%s) — "
+                "restart at /api/v1/auth/google/login" % _short(state)
+            )
+        logger.info(
+            "GoogleOAuth: callback received (state=%s, verifier restored)",
+            _short(state),
+        )
+
         flow = self._build_flow()
-        flow.fetch_token(code=code)
+        # CRITICAL: re-attach the original verifier so fetch_token sends it.
+        # Without this, oauthlib auto-generates a NEW verifier that does not
+        # match the code_challenge Google saw at the authorization step,
+        # which produces "invalid_grant: Missing code verifier".
+        flow.code_verifier = verifier
+        try:
+            flow.fetch_token(code=code)
+        except Exception as exc:
+            logger.error("GoogleOAuth: token exchange failed — %s", exc)
+            raise
+
         creds = flow.credentials
         token_dict = _credentials_to_dict(creds)
         token_store.save(token_dict)
-        logger.info("GoogleOAuth: exchanged code, tokens saved (scopes=%d)", len(creds.scopes or []))
+        logger.info(
+            "GoogleOAuth: token exchange succeeded (scopes=%d, refresh_token=%s)",
+            len(creds.scopes or []),
+            "yes" if creds.refresh_token else "no",
+        )
         return token_dict
 
     def load_credentials(self):
@@ -159,6 +270,59 @@ class GoogleOAuth:
             redirect_uri=settings.google_oauth_redirect_uri,
         )
         return flow
+
+    # ── PKCE verifier store ───────────────────────────────────────────────────
+
+    async def _store_verifier(self, state: str, verifier: str) -> None:
+        """Persist verifier under `state` with TTL. Redis first, memory fallback."""
+        if self._redis is not None:
+            try:
+                await self._redis.setex(
+                    _PKCE_PREFIX + state, _PKCE_TTL_SECONDS, verifier,
+                )
+                return
+            except Exception as exc:
+                logger.warning(
+                    "GoogleOAuth: Redis setex failed (%s) — storing verifier in memory", exc,
+                )
+        async with self._mem_lock:
+            self._evict_expired()
+            self._mem_store[state] = (verifier, time.time() + _PKCE_TTL_SECONDS)
+
+    async def _pop_verifier(self, state: str) -> str | None:
+        """Retrieve and delete the verifier for a given state. Returns None if absent."""
+        if self._redis is not None:
+            try:
+                key = _PKCE_PREFIX + state
+                verifier = await self._redis.get(key)
+                if verifier:
+                    # Single-use: remove immediately to prevent replay.
+                    await self._redis.delete(key)
+                    return verifier
+                # Not in Redis — fall through to memory in case Redis came online
+                # between login and callback.
+            except Exception as exc:
+                logger.warning(
+                    "GoogleOAuth: Redis get failed (%s) — checking memory fallback", exc,
+                )
+        async with self._mem_lock:
+            self._evict_expired()
+            entry = self._mem_store.pop(state, None)
+            return entry[0] if entry is not None else None
+
+    def _evict_expired(self) -> None:
+        """Drop expired entries from the in-memory store. Called under _mem_lock."""
+        now = time.time()
+        expired = [s for s, (_, exp) in self._mem_store.items() if exp < now]
+        for s in expired:
+            self._mem_store.pop(s, None)
+
+
+def _short(state: str) -> str:
+    """Truncate a state value for logging — never log the full secret."""
+    if not state:
+        return "<empty>"
+    return state[:8] + "…" if len(state) > 8 else state
 
 
 def _credentials_to_dict(creds) -> dict:
